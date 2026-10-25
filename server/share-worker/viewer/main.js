@@ -54,6 +54,7 @@ const page = {
   toggleContents: byId("toggle-contents"),
   scrim: byId("scrim"),
   contents: byId("contents"),
+  resizer: byId("contents-resizer"),
   contentsList: byId("contents-list"),
   contentsEmpty: byId("contents-empty"),
   toast: byId("toast"),
@@ -77,13 +78,13 @@ function localizePage() {
   }
 }
 
-/** Shows why the document cannot be shown. Only a password link keeps
- * "Open in Markdown Preview": the app can open it, but not a broken link. */
-function showStatus(message, { appCanOpen = false } = {}) {
+/** Shows why the document cannot be shown. "Open in Markdown Preview"
+ * stays: it opens the link in the app (or, for a link without a key, the
+ * website), so the reader can still reach the app from here. */
+function showStatus(message) {
   page.statusText.textContent = message;
   page.status.hidden = false;
   page.crumbSeparator.setAttribute("hidden", "");
-  page.open.hidden = !appCanOpen;
   page.download.hidden = true;
   document.documentElement.dataset.loaded = "error";
 }
@@ -230,6 +231,80 @@ function updateContentsFade() {
 page.contents.addEventListener("scroll", updateContentsFade, { passive: true });
 window.addEventListener("resize", updateContentsFade);
 
+// The rail's width: dragged at its edge or set with the arrow keys on it,
+// remembered per browser; a double-click or Enter on the edge goes back to
+// viewer.css's default. boot.js applied the saved width before the first
+// paint.
+
+const clampRailWidth = (width) => Math.round(Math.min(Math.max(width, window.mdpRail.min), window.mdpRail.max));
+
+/** The rail's width beside the page. It is read from --rail-width, not the
+ * layout, because a narrow window shows the rail as a wider drawer. */
+const railWidth = () => parseFloat(getComputedStyle(page.contents).getPropertyValue("--rail-width"));
+
+/** Saves the rail's width (null for the default) and applies it page-wide. */
+function saveRailWidth(width) {
+  page.contents.style.removeProperty("--rail-width");
+  if (width === null) document.documentElement.style.removeProperty("--rail-width");
+  else document.documentElement.style.setProperty("--rail-width", `${width}px`);
+  store("mdp.railWidth", width === null ? "" : String(width));
+  updateResizerValue();
+  updateContentsFade();
+}
+
+/** The separator's value for assistive technology: the rail's width. */
+function updateResizerValue() {
+  page.resizer.setAttribute("aria-valuemin", String(window.mdpRail.min));
+  page.resizer.setAttribute("aria-valuemax", String(window.mdpRail.max));
+  page.resizer.setAttribute("aria-valuenow", String(railWidth()));
+}
+
+page.resizer.addEventListener("pointerdown", (event) => {
+  // One drag at a time: a second finger on the edge does nothing.
+  if (event.button !== 0 || document.documentElement.classList.contains("resizing")) return;
+  event.preventDefault();
+  const pointer = event.pointerId;
+  const startX = event.clientX;
+  const startWidth = railWidth();
+  let width = startWidth;
+  // Only the rail reads the width, so a drag restyles the rail alone.
+  const drag = (move) => {
+    if (move.pointerId !== pointer) return;
+    width = clampRailWidth(startWidth + move.clientX - startX);
+    page.contents.style.setProperty("--rail-width", `${width}px`);
+  };
+  const end = (lost) => {
+    if (lost.pointerId !== pointer) return;
+    page.resizer.removeEventListener("pointermove", drag);
+    page.resizer.removeEventListener("lostpointercapture", end);
+    document.documentElement.classList.remove("resizing");
+    saveRailWidth(width);
+  };
+  page.resizer.setPointerCapture(pointer);
+  page.resizer.addEventListener("pointermove", drag);
+  page.resizer.addEventListener("lostpointercapture", end);
+  document.documentElement.classList.add("resizing");
+});
+
+page.resizer.addEventListener("dblclick", () => saveRailWidth(null));
+
+page.resizer.addEventListener("keydown", (event) => {
+  const step = event.shiftKey ? 40 : 10;
+  const width = railWidth();
+  const next = {
+    ArrowLeft: width - step,
+    ArrowRight: width + step,
+    Home: window.mdpRail.min,
+    End: window.mdpRail.max,
+  }[event.key];
+  if (event.key === "Enter") saveRailWidth(null);
+  else if (next !== undefined) saveRailWidth(clampRailWidth(next));
+  else return;
+  event.preventDefault();
+});
+
+updateResizerValue();
+
 /** Lists the document's h1–h3. The rail stays in place without them, so
  * the layout never moves once the document arrives. */
 function buildContents() {
@@ -344,7 +419,7 @@ async function main() {
   }
   if (link.hasPassword) {
     openInAppIfRemembered();
-    return showStatus(text.password, { appCanOpen: true });
+    return showStatus(text.password);
   }
 
   const envelope = pageEnvelope();
@@ -357,7 +432,7 @@ async function main() {
   try {
     payload = decodePayload(await openEnvelope(envelope.bytes, link.key, null));
   } catch (error) {
-    if (error instanceof ShareError && error.code === "password") return showStatus(text.password, { appCanOpen: true });
+    if (error instanceof ShareError && error.code === "password") return showStatus(text.password);
     return showStatus(text.damaged);
   }
   await render(payload);

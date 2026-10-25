@@ -16,6 +16,14 @@
   root.style.setProperty("--reader-size", `${sizes[size]}px`);
   root.dataset.width = stored("mdp.width") === "full" ? "full" : "fixed";
   root.dataset.contents = stored("mdp.contents") === "hidden" ? "hidden" : "shown";
+  // The Contents rail's width bounds (main.js reads them here), and the
+  // width the reader dragged it to; without one, viewer.css's default applies.
+  const rail = { min: 180, max: 400 };
+  window.mdpRail = rail;
+  const railWidth = Number(stored("mdp.railWidth"));
+  if (railWidth > 0) {
+    root.style.setProperty("--rail-width", `${Math.min(Math.max(railWidth, rail.min), rail.max)}px`);
+  }
 
   // Appearance, as in the app: Automatic follows the system, live. The
   // page always carries an explicit scheme, which the app's stylesheet
