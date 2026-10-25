@@ -1,0 +1,681 @@
+/* The share page's own chrome: a grey frame holding the document on a
+   sheet, like the app's window. The document itself uses the app's
+   stylesheet in generated/markdown.css; the reader controls only change
+   its text size and column width. */
+
+body { padding: 0; }
+
+/* The app's stylesheet uses WebKit's system label and separator colors,
+   which other browsers reject; these are their macOS values. */
+@supports not (color: -apple-system-label) {
+  :root {
+    --text: light-dark(rgba(0, 0, 0, 0.85), rgba(255, 255, 255, 0.85));
+    --secondary: light-dark(rgba(0, 0, 0, 0.5), rgba(255, 255, 255, 0.55));
+    --tertiary: light-dark(rgba(0, 0, 0, 0.26), rgba(255, 255, 255, 0.25));
+    --quote-border: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+    --grid: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+  }
+}
+
+:root {
+  /* Frame, sheet, hairline, and shadow match Linear's light surfaces,
+     measured from its window in sRGB; dark uses its dark theme tokens. */
+  --frame: #f2f2f3;
+  --sheet: #fafafb;
+  --ink: rgba(0, 0, 0, 0.85);
+  --muted: rgba(0, 0, 0, 0.5);
+  --hairline: rgba(0, 0, 0, 0.08);
+  --hover: rgba(0, 0, 0, 0.05);
+  /* Linear's hover on its grey sidebar, where these buttons also sit
+     (measured): #ececed on #f2f2f3 (black at
+     2.5%); icons muted at rest, near black on hover. Contents items use
+     its 7 px corners; the bar buttons stay circular. */
+  --button-hover: rgba(0, 0, 0, 0.025);
+  --button-radius: 7px;
+  --icon: #6f6f71;
+  --icon-hover: #232323;
+  /* Toolbar buttons hover like Linear's sidebar search button (measured):
+     a flat 28 px circle, #e7e7e8 on #f2f2f3 (black at 4.5%). */
+  --toolbar-hover: rgba(0, 0, 0, 0.045);
+  /* The sidebar toggle rises instead, like Linear's round compose button:
+     the panel color, a 7% hairline, a short shadow below. */
+  --button-raised: #fafafb;
+  --button-raised-edge: 0 0 0 0.5px rgba(0, 0, 0, 0.07), 0 1px 1.5px rgba(0, 0, 0, 0.06),
+    0 2px 4px rgba(0, 0, 0, 0.02);
+  --accent: #0068da;
+  --on-accent: #ffffff;
+  --panel: #ffffff;
+  --panel-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 8px 28px rgba(0, 0, 0, 0.12);
+  /* Linear's popover (measured): white, a #ededed hairline edge and row
+     dividers, #717173 labels, a soft shadow that is deeper below. */
+  --popover: #ffffff;
+  --popover-edge: #ededed;
+  --popover-label: #717173;
+  --popover-shadow: 0 0 0 0.5px #ededed, 0 4px 16px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --sheet-edge: 0 0 0 0.5px #e8e8e8, 0 1px 1.5px rgba(0, 0, 0, 0.04), 0 2.5px 2.5px rgba(0, 0, 0, 0.008),
+    0 4px 5px rgba(0, 0, 0, 0.005);
+  --chrome-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --frame-gap: 12px;
+  --gutter: 48px;
+  --reader-size: 15px;
+  --reader-width: 820px;
+  /* Linear's sidebar motion, measured frame by frame from a recording: a
+     damped spring (omega 21/s, damping ratio 0.95, no overshoot) that
+     settles in about 340 ms, sampled for CSS linear(). */
+  --rail-motion: 290ms ease;
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --rail-motion: 341ms linear(0, 0.037, 0.123, 0.231, 0.344, 0.452, 0.551, 0.637, 0.71, 0.771,
+      0.822, 0.862, 0.894, 0.92, 0.94, 0.955, 0.967, 0.976, 0.982, 0.987, 0.991, 0.994, 0.996,
+      0.997, 1);
+  }
+}
+
+/* Dark, by the scheme boot.js resolves (system or the reader's choice). */
+:root[data-mdp-color-scheme="dark"] {
+    --frame: #09090a;
+    --sheet: #111212;
+    --ink: rgba(255, 255, 255, 0.88);
+    --muted: rgba(255, 255, 255, 0.52);
+    --hairline: rgba(255, 255, 255, 0.09);
+    --hover: rgba(255, 255, 255, 0.07);
+    --button-hover: rgba(255, 255, 255, 0.05);
+    --icon: #949597;
+    --icon-hover: #e2e3e5;
+    --toolbar-hover: rgba(255, 255, 255, 0.07);
+    --button-raised: #111212;
+    --button-raised-edge: 0 0 0 0.5px #232325, 0 1px 2px rgba(0, 0, 0, 0.4);
+    --accent: #3b9bff;
+    --on-accent: #08111f;
+    --panel: #2a2a2d;
+    --panel-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.14), 0 10px 32px rgba(0, 0, 0, 0.5);
+    --sheet-edge: 0 0 0 0.5px #232325, 0 1px 3px rgba(0, 0, 0, 0.3);
+    --popover: #18191b;
+    --popover-edge: #2c2d2f;
+    --popover-label: #949597;
+    --popover-shadow: 0 0 0 0.5px #2c2d2f, 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* The app's stylesheet paints a forced scheme with Canvas; the frame stays. */
+:root[data-mdp-color-scheme] { background: var(--frame); }
+:root[data-mdp-color-scheme] body { background: transparent; }
+
+html { background: var(--frame); }
+
+/* The frame stays put and the document scrolls inside the sheet, so the
+   sheet keeps its rounded corners, like the app's window. */
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+}
+
+svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: default;
+}
+
+/* No focus ring on the page's own controls: keyboard focus shows as the
+   control's hover fill instead. Links in the document keep the browser's. */
+:is(.bar, .reading-panel, .contents) :is(button, a):focus { outline: none; }
+.icon-button:focus-visible { color: var(--icon-hover); background: var(--toolbar-hover); }
+.open-button:focus-visible { filter: brightness(1.08); }
+.contents button:focus-visible,
+.capsule button:focus-visible { background: var(--hover); }
+.segmented button:focus-visible:not([aria-checked="true"]) { color: var(--ink); background: var(--hover); }
+.segmented button[aria-checked="true"]:focus-visible { color: var(--accent); }
+
+[hidden] { display: none !important; }
+
+/* Only the document is text to copy; the page's own controls and labels
+   are not, as in a Mac app. Error messages stay selectable. */
+.bar,
+.contents,
+.reading-panel,
+.toast,
+.loading {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* MARK: Bar */
+
+.bar {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 calc(var(--frame-gap) + 8px);
+  font: 13px/1 var(--chrome-font);
+  color: var(--ink);
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.crumb-origin { color: var(--muted); }
+
+/* The breadcrumb separator and the Contents label wait for the document,
+   keeping their space so nothing moves when they appear. */
+:root:not([data-loaded]) .crumb-sep,
+:root:not([data-loaded="document"]) .contents .panel-label { visibility: hidden; }
+.crumb-sep { width: 12px; height: 12px; color: var(--muted); flex: none; }
+
+.crumb-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.icon-button {
+  cursor: default;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: var(--icon);
+  background: none;
+  text-decoration: none;
+}
+
+.icon-button:hover,
+.icon-button[aria-expanded="true"] {
+  color: var(--icon-hover);
+  background: var(--toolbar-hover);
+}
+
+/* Pressed while the rail shows; boot.js sets data-contents before the first
+   paint, so the toggle never changes state on load. */
+#toggle-contents:hover,
+:root[data-contents="shown"] #toggle-contents {
+  color: var(--icon-hover);
+  background: var(--button-raised);
+  box-shadow: var(--button-raised-edge);
+}
+
+.text-button {
+  width: auto;
+  padding: 0 10px;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+/* The one filled button: a pill as tall as the circular icon buttons. */
+.open-button {
+  cursor: default;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  margin-left: 8px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-weight: 500;
+  color: var(--on-accent);
+  background: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.open-button:hover { filter: brightness(1.08); }
+
+/* The document's stylesheet underlines hovered links; the bar's links are buttons. */
+.bar a:hover { text-decoration: none; }
+.open-button .short { display: none; }
+
+/* MARK: Reading panel: Linear's popover rows, the app's controls and words */
+
+.reading { position: relative; }
+
+.reading-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 300px;
+  border-radius: 12px;
+  background: var(--popover);
+  box-shadow: var(--popover-shadow);
+  transform-origin: top right;
+  animation: panel-in 140ms ease-out;
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: scale(0.96); }
+}
+
+.panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 14px;
+  box-sizing: border-box;
+}
+
+.panel-row + .panel-row { border-top: 1px solid var(--popover-edge); }
+.panel-row-label { color: var(--popover-label); white-space: nowrap; }
+
+/* Text size: the app's capsule, a small and a large A. */
+.capsule {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--hover);
+}
+
+.capsule button {
+  width: 46px;
+  height: 100%;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+}
+
+.capsule button:hover:not(:disabled) { background: var(--hover); }
+.capsule button:disabled { opacity: 0.3; }
+.capsule-divider { width: 1px; height: 14px; background: var(--hairline); transition: opacity 120ms; }
+/* A hovered half fills its side, so the divider steps aside. */
+.capsule:has(button:hover:not(:disabled)) .capsule-divider { opacity: 0; }
+.small-a { font-size: 12px; font-weight: 500; }
+.large-a { font-size: 17px; font-weight: 500; }
+
+.segmented {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--hover);
+}
+
+/* One thumb behind the options; it slides to the chosen one with the
+   rail's spring. main.js sets its position and width. */
+.segmented::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  z-index: -1;
+  width: var(--thumb-width, 0);
+  transform: translateX(var(--thumb-x, 0));
+  border-radius: 999px;
+  background: var(--popover);
+  box-shadow: 0 0 0 0.5px var(--hairline), 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.segmented.sliding::before { transition: transform var(--rail-motion), width var(--rail-motion); }
+
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: none;
+  transition: color 150ms;
+}
+
+.segmented button[aria-checked="true"] { color: var(--ink); }
+
+/* MARK: Workspace: the Contents rail on the frame, the document on the sheet */
+
+.workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 0 var(--frame-gap) var(--frame-gap);
+  /* The rail slides off past the window edge, as in Linear. Clip only
+     sideways, so the sheet's top hairline (drawn just outside it) stays. */
+  overflow-x: clip;
+}
+
+.sheet {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--sheet);
+  box-shadow: var(--sheet-edge);
+}
+
+/* Hiding the rail slides it out to the start side in one solid piece, and
+   the sheet's edge follows it; nothing fades. */
+.contents {
+  flex: none;
+  box-sizing: border-box;
+  width: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px 20px 0;
+  font: 13px/1.35 var(--chrome-font);
+  /* Scroll fade: solid, then transparent over 20 px, at an edge
+     only while more of the list is past it (main.js sets the classes). */
+  --fade-top: 0px;
+  --fade-bottom: 0px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top),
+    #000 calc(100% - var(--fade-bottom)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top),
+    #000 calc(100% - var(--fade-bottom)), transparent 100%);
+  transition: --fade-top 150ms ease-out, --fade-bottom 150ms ease-out;
+}
+
+.contents.fade-top { --fade-top: 20px; }
+.contents.fade-bottom { --fade-bottom: 20px; }
+
+@property --fade-top { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --fade-bottom { syntax: "<length>"; inherits: false; initial-value: 0px; }
+
+:root[data-contents="hidden"] .contents { margin-inline-start: -220px; }
+.motion .contents {
+  transition: margin-inline-start var(--rail-motion), --fade-top 150ms ease-out, --fade-bottom 150ms ease-out;
+}
+
+.contents .panel-label,
+.contents-empty { padding-left: 8px; }
+
+.contents-empty { margin: 0; color: var(--muted); }
+
+.contents .panel-label {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+
+.contents ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.contents button {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--button-radius);
+  text-align: start;
+  color: var(--muted);
+  background: none;
+  overflow-wrap: anywhere;
+}
+
+.contents button:hover { color: var(--icon-hover); background: var(--button-hover); }
+.contents button.current { color: var(--ink); font-weight: 500; background: var(--hover); }
+.contents .level-2 button { padding-left: 20px; }
+.contents .level-3 button { padding-left: 32px; }
+
+.page {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Jumps to a heading or footnote glide there (Tailwind's scroll-smooth).
+   The page scrolls in .page on a computer and in the root on a phone. */
+html,
+.page { scroll-behavior: smooth; }
+
+article.markdown-body {
+  max-width: var(--reader-width);
+  padding: 40px var(--gutter) 72px;
+  font-size: var(--reader-size);
+  box-sizing: content-box;
+}
+
+article.markdown-body [id] { scroll-margin-top: 16px; }
+:root[data-width="full"] { --reader-width: none; }
+
+.notice {
+  max-width: var(--reader-width);
+  margin: 24px auto 0;
+  padding: 0 var(--gutter);
+  font: 13px/1.45 var(--chrome-font);
+  color: var(--muted);
+  box-sizing: content-box;
+}
+
+.mdp-missing-image {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px dashed var(--hairline);
+  border-radius: 6px;
+  font: 13px var(--chrome-font);
+  color: var(--muted);
+}
+
+/* MARK: Loading. Only a slow load shows it: "Loading…" fades in after one
+   second, as Linear's loading screen does, so most opens never see it. */
+
+.loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  pointer-events: none;
+  font: 13px var(--chrome-font);
+  color: var(--muted);
+  animation: loading-in 0.4s ease-out 1s both, loading-pulse 1.6s ease-in-out 1.4s infinite;
+}
+
+:root[data-loaded] .loading { display: none; }
+
+@keyframes loading-in { from { opacity: 0; } }
+@keyframes loading-pulse { 50% { opacity: 0.45; } }
+
+/* MARK: Status (expired, damaged, password) */
+
+.status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 360px;
+  margin: 18vh auto 0;
+  padding: 0 24px 48px;
+  font: 15px/1.5 var(--chrome-font);
+  text-align: center;
+  color: var(--ink);
+}
+
+.status svg {
+  width: 32px;
+  height: 32px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  stroke-width: 1.6;
+}
+
+.status p { margin: 0; }
+
+/* MARK: Toast */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 30;
+  padding: 9px 14px;
+  border-radius: 10px;
+  font: 13px var(--chrome-font);
+  color: var(--ink);
+  background: var(--panel);
+  box-shadow: var(--panel-shadow);
+  transform: translateX(-50%);
+  animation: toast-in 160ms ease-out;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+}
+
+/* MARK: Narrow windows */
+
+.scrim { display: none; }
+
+/* Narrow windows: the contents slide in over the page from the left, as
+   Linear's sidebar does on a phone, behind a dimmed page. */
+@media (max-width: 980px) {
+  .contents,
+  :root[data-contents="hidden"] .contents {
+    position: fixed;
+    z-index: 40;
+    inset: 0 auto 0 0;
+    width: min(300px, 82vw);
+    margin: 0;
+    padding: max(16px, env(safe-area-inset-top)) 12px max(20px, env(safe-area-inset-bottom)) 12px;
+    font-size: 15px;
+    background: var(--sheet);
+    border-radius: 0 12px 12px 0;
+    /* Only the right edge casts a shadow; the top meets the screen edge. */
+    box-shadow: 6px 0 24px -8px rgba(0, 0, 0, 0.18);
+    -webkit-mask-image: none;
+    mask-image: none;
+    transform: translateX(calc(-100% - 40px));
+    visibility: hidden;
+  }
+
+  :root[data-drawer="open"] .contents {
+    transform: none;
+    visibility: visible;
+  }
+
+  .motion .contents { transition: transform var(--rail-motion), visibility 0s linear 341ms; }
+
+  :root[data-drawer="open"] .contents { transition-delay: 0s; }
+
+  .contents button { padding-block: 8px; }
+
+  .scrim {
+    display: block;
+    position: fixed;
+    z-index: 39;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.25);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 250ms ease-out;
+  }
+
+  :root[data-drawer="open"] .scrim {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* The rail's pressed look follows the drawer here, not the saved rail. */
+  :root[data-contents="shown"] #toggle-contents:not(:hover) {
+    color: var(--icon);
+    background: none;
+    box-shadow: none;
+  }
+
+  :root[data-drawer="open"] #toggle-contents {
+    color: var(--icon-hover);
+    background: var(--button-raised);
+    box-shadow: var(--button-raised-edge);
+  }
+}
+
+@media (max-width: 640px) {
+  :root {
+    --frame-gap: 0px;
+    --gutter: 16px;
+  }
+
+  .bar { gap: 6px; padding: 0 8px 0 16px; }
+  .crumb-origin,
+  .crumb-sep { display: none !important; }
+  .reading { position: static; }
+  .reading-panel {
+    position: fixed;
+    top: 60px;
+    right: 8px;
+    width: min(300px, calc(100vw - 16px));
+  }
+  .open-button { margin-left: 4px; padding: 0 12px; }
+  .open-button .long { display: none; }
+  .open-button .short { display: inline; }
+  /* A phone scrolls the whole page, so the browser can hide its bars. */
+  body { height: auto; min-height: 100dvh; }
+  .bar { position: sticky; top: 0; background: var(--frame); }
+  .sheet { border-radius: 0; box-shadow: none; overflow: visible; }
+  .page { overflow: visible; }
+  article.markdown-body { padding-top: 20px; }
+  article.markdown-body [id] { scroll-margin-top: 64px; }
+}
+
+/* MARK: Print: the whole document, without the page's controls */
+
+@media print {
+  :root,
+  body { height: auto; overflow: visible !important; background: #fff !important; }
+  .bar,
+  .contents,
+  .scrim,
+  .toast,
+  .loading,
+  .notice { display: none !important; }
+  .workspace,
+  .sheet,
+  .page { display: block; height: auto; overflow: visible; border-radius: 0; box-shadow: none; background: none; }
+  article.markdown-body { max-width: none; padding: 0; }
+}
+
+/* Last, so no rule above (the narrow-window drawer's among them) undoes it. */
+@media (prefers-reduced-motion: reduce) {
+  html,
+  .page { scroll-behavior: auto; }
+  .reading-panel,
+  .toast { animation: none; }
+  .loading { animation: loading-in 0.4s ease-out 1s both; }
+  .motion .contents,
+  .scrim,
+  .segmented.sliding::before { transition: none; }
+}

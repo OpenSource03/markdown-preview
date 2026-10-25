@@ -3,8 +3,8 @@
 Status: draft, 2026-10-16; revised 2026-10-23. Built behind the hidden
 `MarkdownPreview.shareLinksEnabled` default: the format and crypto (§2), the
 Worker API and its deploy setup on `md-preview.app` (§3), and sharing from the
-app (§4.1–4.4). Still planned: opening links in the app and Universal Links
-(§4.5) and the web viewer (§5).
+app (§4.1–4.4), and the web viewer (§5, without diagrams yet). Still planned:
+opening links in the app and Universal Links (§4.5).
 
 Goal: from an open Markdown document, the user creates a random link. Anyone
 with the link can read the document in a browser, or open it in Markdown
@@ -365,6 +365,31 @@ app is missing.
 
 ## 5. Web — phase 2
 
+**Status (2026-10-23):** the viewer is built in `server/share-worker/viewer/`
+(see its README). Done: decrypt, sanitize with an allowlist, the app's
+stylesheet and code/math renderers (exported and checked by
+`ShareViewerKitTests`), local images as `blob:` URLs, remote images blocked
+with a note, Open in Markdown Preview, Download .md, Copy link (with a
+"Link copied" toast), an Aa panel in Linear's popover style with the app's
+controls and words (text size, Appearance Automatic/Light/Dark, width; remembered per
+browser), a Contents rail (always in place, "No headings" when empty, its
+shown or hidden state remembered), and error states (only a password link
+keeps the open button). In a narrow window the Contents open as a drawer
+over the dimmed page, as Linear's sidebar does on a phone. On phones and
+tablets, which have no app, the open button reads "Get Mac App" and copies
+the link to markdownpreview.app. Select All selects only the document (the page's
+controls are not selectable), and copying whole blocks puts their Markdown
+source on the clipboard with the app's own code (`markdownSelectionScript`,
+exported in `renderers.js`). No layout shift while loading (CLS 0 in Chrome):
+`boot.js`, a blocking script in the head, applies the saved layout before
+the first paint and starts the envelope request at once; highlight.js and
+KaTeX load only for documents with code or math. A slow load shows only
+the text "Loading…", faded in after 1 s as on Linear's loading screen. Not
+yet: diagrams (Pele; a diagram shows its source for now), password links, Report, burn after reading. Deviations
+from the text below: the page loads a few same-origin files rather than one
+bundle, and `style-src-attr 'unsafe-inline'` is allowed because KaTeX sets
+inline styles; scripts stay `'self'` only.
+
 - Viewer at `GET /s/<id>`: static HTML + one JS bundle from the same origin.
   It reads the fragment, fetches `/shares/<id>`, decrypts with
   WebCrypto, inflates with `DecompressionStream`, and renders.
@@ -391,9 +416,13 @@ app is missing.
   can read the key from `location.hash`.
 - Buttons: "Open in Markdown Preview" (`md-preview://share/…`), "Download .md",
   "Report". The open button is always visible at the top: it is the only path
-  into the app from Chrome and Firefox. **Never redirect to `md-preview://`
-  automatically** — a page cannot tell whether the app is installed, and Safari
-  shows an error alert when it is not.
+  into the app from Chrome and Firefox. A page cannot tell whether the app is
+  installed, and Safari shows an error alert when it is not, so the page opens
+  `md-preview://` by itself only in a browser where the button has already
+  worked (decided 2026-10-25, as Slack and Zoom do): when the window loses
+  focus within 3 s of a click, the page stores `mdp.opensInApp` in local
+  storage, and later live shares open the app on load. The document still
+  renders behind the browser's prompt.
 - Burn after reading: a Durable Object per share makes "read once" atomic;
   confirm step before fetch. Not in phase 1.
 - Report: form posts the ID (and optionally the full link, which lets us read
