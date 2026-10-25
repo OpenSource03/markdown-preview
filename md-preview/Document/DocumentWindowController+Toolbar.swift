@@ -592,7 +592,7 @@ extension DocumentWindowController {
     func items(for pickerToolbarItem: NSSharingServicePickerToolbarItem) -> [Any] {
         guard let currentMarkdown else { return [] }
         let title = currentFileURL?.lastPathComponent ?? documentWindow.title
-        return [SharePreviewItem.make(markdown: currentMarkdown, title: title)]
+        return [SharePreviewItem.make(markdown: currentMarkdown, title: title, fileURL: currentFileURL)]
     }
 
     /// Export and Print sit in their own section above the system services,
@@ -607,7 +607,9 @@ extension DocumentWindowController {
                 NSApp.sendAction(action.action, to: nil, from: self)
             }
         }
-        return services + proposedServices
+        // The share-link row ends the section, right above the system's Copy,
+        // which sits in its own section that apps cannot add rows to.
+        return services + shareLinkServices() + proposedServices
     }
 }
 
