@@ -453,6 +453,17 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
     /// built rather than after the launch turn.
     private static let immediateRenderByteLimit = 256 * 1024
 
+    /// Rules that block network loads, set before a document that must not
+    /// reach the network renders (a received share). Nil removes them.
+    var remoteContentBlocker: WKContentRuleList? {
+        didSet {
+            guard oldValue !== remoteContentBlocker else { return }
+            let controller = webView.configuration.userContentController
+            if let oldValue { controller.remove(oldValue) }
+            if let remoteContentBlocker { controller.add(remoteContentBlocker) }
+        }
+    }
+
     func display(markdown: String, assetBaseURL: URL? = nil, renderImmediately: Bool = false) {
         pendingContentProcessReload?.cancel()
         pendingContentProcessReload = nil
@@ -708,6 +719,7 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
             guard let markdown = dict["markdown"] as? String else { return }
             TablePreviewWindow.shared.present(markdown: markdown, title: dict["title"] as? String,
                                               assetBaseURL: currentAssetBase, pageZoom: pageZoom,
+                                              remoteContentBlocker: remoteContentBlocker,
                                               relativeTo: window)
         #endif
         case "copyCode":
