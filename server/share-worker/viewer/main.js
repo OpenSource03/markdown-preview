@@ -1,10 +1,10 @@
-// The share link web viewer: fetches the envelope, decrypts it with the key
-// from the URL fragment, and shows the document with the app's own
+// The share link web viewer: reads the envelope the Worker streamed into the
+// page, decrypts it with the key from the URL fragment, and shows the document with the app's own
 // stylesheet and renderers. The key never leaves this page; the server only
 // ever sees the encrypted envelope. docs/share-link-plan.md §5.
 
 import { ShareError, openEnvelope, parseLink } from "./share-crypto.js";
-import { assetPathForSource, decodePayload, displayTitle } from "./payload.js";
+import { assetPathForSource, base64Bytes, decodePayload, displayTitle } from "./payload.js";
 import { pickLanguage, strings } from "./strings.js";
 
 // An explicit allowlist (never USE_PROFILES, which resets ALLOWED_ATTR):
@@ -347,28 +347,38 @@ async function main() {
     return showStatus(text.password, { appCanOpen: true });
   }
 
-  let envelope;
-  try {
-    // boot.js started this request before the larger scripts loaded.
-    const response = await (window.mdpEnvelope ??
-      fetch(`/shares/${link.id}`, { cache: "no-store", referrerPolicy: "no-referrer" }));
-    if (response.status === 404) return showStatus(text.gone);
-    if (!response.ok) return showStatus(text.unavailable);
-    // Only a live share is worth the app's attention.
-    openInAppIfRemembered();
-    envelope = new Uint8Array(await response.arrayBuffer());
-  } catch {
-    return showStatus(text.unavailable);
-  }
+  const envelope = pageEnvelope();
+  if (envelope.status === "not_found") return showStatus(text.gone);
+  if (!envelope.bytes) return showStatus(text.unavailable);
+  // Only a live share is worth the app's attention.
+  openInAppIfRemembered();
 
   let payload;
   try {
-    payload = decodePayload(await openEnvelope(envelope, link.key, null));
+    payload = decodePayload(await openEnvelope(envelope.bytes, link.key, null));
   } catch (error) {
     if (error instanceof ShareError && error.code === "password") return showStatus(text.password, { appCanOpen: true });
     return showStatus(text.damaged);
   }
   await render(payload);
+}
+
+/**
+ * The envelope the Worker streamed into the page (#mdp-envelope), so it
+ * needs no second request: `{ bytes }`, or `{ status }` ("not_found",
+ * "unavailable") when there is none to show.
+ */
+function pageEnvelope() {
+  const block = document.getElementById("mdp-envelope");
+  if (!block) return { status: "unavailable" };
+  block.remove();
+  const { status } = block.dataset;
+  if (status !== "ok") return { status };
+  try {
+    return { bytes: base64Bytes(block.textContent) };
+  } catch {
+    return { status: "unavailable" };
+  }
 }
 
 /** Loads a vendor script or stylesheet once, only when a document needs it. */
@@ -378,8 +388,10 @@ function loadVendor(file) {
     loaded.set(file, new Promise((resolve) => {
       const isStyle = file.endsWith(".css");
       const element = document.createElement(isStyle ? "link" : "script");
-      if (isStyle) { element.rel = "stylesheet"; element.href = `/s/_viewer/vendor/${file}`; }
-      else element.src = `/s/_viewer/vendor/${file}`;
+      // File name to content-hashed URL, written in by viewer/build.mjs.
+      const url = VENDOR_URLS[file];
+      if (isStyle) { element.rel = "stylesheet"; element.href = url; }
+      else element.src = url;
       element.onload = element.onerror = resolve;
       document.head.append(element);
     }));

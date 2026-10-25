@@ -37,9 +37,17 @@ export function base64urlDecode(text) {
 }
 
 export function base64urlEncode(bytes) {
+  return base64Encode(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Standard base64: native where the runtime has it, else built in pieces. */
+export function base64Encode(bytes) {
+  if (bytes.toBase64) return bytes.toBase64();
   let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  return btoa(binary);
 }
 
 /**
@@ -77,7 +85,7 @@ export async function openEnvelope(envelope, key, password) {
       "raw", new TextEncoder().encode(password.normalize("NFC")), "PBKDF2", false, ["deriveBits"]);
     const bits = await crypto.subtle.deriveBits(
       { name: "PBKDF2", hash: "SHA-256", salt, iterations }, passwordKey, 256);
-    inputKeyMaterial = concat(key, new Uint8Array(bits));
+    inputKeyMaterial = concat([key, new Uint8Array(bits)]);
   }
 
   const hkdfKey = await crypto.subtle.importKey("raw", inputKeyMaterial, "HKDF", false, ["deriveKey"]);
@@ -114,14 +122,14 @@ async function inflate(bytes, limit) {
   } catch (error) {
     throw error instanceof ShareError ? error : new ShareError("malformed");
   }
-  return concat(...chunks);
+  return concat(chunks);
 }
 
 function hasMagic(bytes) {
   return MAGIC.every((byte, index) => bytes[index] === byte);
 }
 
-function concat(...parts) {
+export function concat(parts) {
   const result = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
   let offset = 0;
   for (const part of parts) {

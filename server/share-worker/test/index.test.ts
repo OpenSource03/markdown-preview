@@ -2,6 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import fixture from "../../../tests/fixtures/share-link/vectors.json";
 import { purgeExpired } from "../src/index";
+import { base64Bytes } from "../viewer/payload.js";
 
 const ORIGIN = "https://share.example";
 
@@ -21,6 +22,14 @@ function call(path: string, init: RequestInit = {}, ip = crypto.randomUUID()): P
 async function create(body: BodyInit = envelope, query = "") {
   const response = await call(`/shares${query}`, { method: "POST", body });
   return { response, body: (await response.json()) as Record<string, string> };
+}
+
+/** Moves a share's expiry into the past, as if its time ran out. */
+async function expireShare(id: string) {
+  const object = await env.SHARES.get(`shares/${id}`);
+  await env.SHARES.put(`shares/${id}`, await object!.arrayBuffer(), {
+    customMetadata: { ...object!.customMetadata, expiresAt: new Date(Date.now() - 1000).toISOString() },
+  });
 }
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
@@ -64,6 +73,26 @@ describe("create and read", () => {
     expect(object?.customMetadata?.ownerHash).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(object?.customMetadata)).not.toContain(body.ownerToken);
   });
+
+  it("stores an upload that arrives in many tiny chunks", async () => {
+    // More chunks than a function call takes arguments, one byte each.
+    const bytes = new Uint8Array(200_000);
+    bytes.set(envelope);
+    // One byte per pull: chunks queued all at once reach the Worker joined.
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent === bytes.length) return controller.close();
+        controller.enqueue(bytes.subarray(sent, ++sent));
+      },
+    });
+    const { response, body } = await create(stream);
+    expect(response.status).toBe(201);
+    const stored = new Uint8Array(await (await call(`/shares/${body.id}`)).arrayBuffer());
+    // Compared in one step: an element-by-element diff of 200,000 bytes is slow.
+    expect(stored.length).toBe(bytes.length);
+    expect(stored.every((byte, i) => byte === bytes[i])).toBe(true);
+  }, 30_000); // 200,000 pulls take a few seconds on a CI runner.
 
   it("rejects bodies that are not MDP1 envelopes", async () => {
     const wrongMagic = envelope.slice();
@@ -110,15 +139,11 @@ describe("create and read", () => {
 
   it("deletes a share on the first read after it expires", async () => {
     const { body } = await create();
-    const key = `shares/${body.id}`;
-    const object = await env.SHARES.get(key);
-    await env.SHARES.put(key, await object!.arrayBuffer(), {
-      customMetadata: { ...object!.customMetadata, expiresAt: new Date(Date.now() - 1).toISOString() },
-    });
+    await expireShare(body.id);
 
     expect((await call(`/shares/${body.id}`)).status).toBe(404);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(await env.SHARES.head(key)).toBeNull();
+    expect(await env.SHARES.head(`shares/${body.id}`)).toBeNull();
   });
 });
 
@@ -207,8 +232,51 @@ describe("headers and routing", () => {
     expect(csp).not.toMatch(/script-src[^;]*unsafe/);
     expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
     const html = await response.text();
-    expect(html).toContain('src="/s/_viewer/main.js"');
+    expect(html).toMatch(/src="\/s\/_viewer\/assets\/viewer\.[0-9a-f]{12}\.js" defer/);
     expect(html).not.toMatch(/<script>(?!<\/script>)/);
+  });
+
+  // The page's envelope block, as the browser reads it.
+  const envelopeBlock = (html: string) =>
+    /<script id="mdp-envelope" type="application\/octet-stream" data-status="(\w+)">([^<]*)<\/script>\s*<\/body>/.exec(html);
+
+  it("streams the envelope into the viewer page", async () => {
+    for (const vector of fixture.vectors) {
+      const bytes = hex(vector.envelope);
+      const { body } = await create(bytes);
+      const block = envelopeBlock(await (await call(`/s/${body.id}`)).text());
+      expect(block?.[1], vector.name).toBe("ok");
+      expect(base64Bytes(block![2])).toEqual(bytes);
+    }
+  });
+
+  it("streams a large envelope whole, across R2's chunks", async () => {
+    // Not a multiple of 3, so the pieces must carry bytes between chunks.
+    const bytes = new Uint8Array(1_000_001);
+    for (let offset = 0; offset < bytes.length; offset += 65_536) {
+      crypto.getRandomValues(bytes.subarray(offset, offset + 65_536));
+    }
+    bytes.set(envelope.subarray(0, 4));
+    const { body } = await create(bytes);
+    const block = envelopeBlock(await (await call(`/s/${body.id}`)).text());
+    expect(block?.[1]).toBe("ok");
+    expect(base64Bytes(block![2])).toEqual(bytes);
+  });
+
+  it("marks a missing or expired share in the viewer page", async () => {
+    expect(envelopeBlock(await (await call("/s/AAAAAAAAAAAAAAAAAAAAAA")).text())?.slice(1)).toEqual(["not_found", ""]);
+
+    const { body } = await create();
+    await expireShare(body.id);
+    expect(envelopeBlock(await (await call(`/s/${body.id}`)).text())?.[1]).toBe("not_found");
+  });
+
+  it("caches the viewer's files for good, named by their content", async () => {
+    const html = await (await call("/s/AAAAAAAAAAAAAAAAAAAAAA")).text();
+    const script = /src="(\/s\/_viewer\/assets\/viewer\.[0-9a-f]{12}\.js)"/.exec(html)![1];
+    const response = await env.ASSETS.fetch(new URL(script, ORIGIN));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
   });
 
   it("rejects other methods and paths", async () => {
