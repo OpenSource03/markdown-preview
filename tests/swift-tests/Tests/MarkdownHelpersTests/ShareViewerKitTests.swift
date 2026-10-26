@@ -50,7 +50,64 @@ final class ShareViewerKitTests: XCTestCase {
             })();
 
             """,
+            // Loaded after pele.global.js, only for documents with diagrams.
+            "diagrams.js": header + """
+            window.MdpDiagrams = {
+                // (messages) => { bootstrap, renderAll }
+                wiring: \(MarkdownHTML.mermaidWiringFunction),
+                // The app's diagramMessagesJS in each of its languages.
+                messages: {
+            \(languages.map { "        \(javaScriptKey($0)): \(diagramMessages(in: $0))," }.joined(separator: "\n"))
+                },
+            };
+
+            """,
         ]
+    }
+
+    /// The viewer's languages, named as the app's .lproj folders.
+    private static let languages = ["en", "ja", "zh-Hans", "pl", "fa"]
+
+    private static func javaScriptKey(_ language: String) -> String {
+        language.contains("-") ? MarkdownHTML.javaScriptStringLiteral(language) : language
+    }
+
+    private static func localizedStrings(_ language: String) -> [String: String] {
+        let url = TestVendor.repositoryRoot.appendingPathComponent("md-preview/\(language).lproj/Localizable.strings")
+        return (try? PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil))
+            as? [String: String] ?? [:]
+    }
+
+    /// Each string literal of `diagramMessagesJS`, the app's English.
+    private static var diagramTexts: [String] {
+        let literal = try! NSRegularExpression(pattern: #""(?:[^"\\]|\\.)*""#)
+        let js = MarkdownHTML.diagramMessagesJS
+        return literal.matches(in: js, range: NSRange(js.startIndex..., in: js)).map { match in
+            let quoted = String(js[Range(match.range, in: js)!])
+            return (try! JSONSerialization.jsonObject(with: Data("[\(quoted)]".utf8)) as! [String])[0]
+        }
+    }
+
+    /// `diagramMessagesJS` with each English text replaced by `language`'s
+    /// translation from the app's Localizable.strings.
+    static func diagramMessages(in language: String) -> String {
+        let strings = localizedStrings(language)
+        var js = MarkdownHTML.diagramMessagesJS
+        for text in diagramTexts {
+            js = js.replacingOccurrences(of: MarkdownHTML.javaScriptStringLiteral(text),
+                                         with: MarkdownHTML.javaScriptStringLiteral(strings[text] ?? text))
+        }
+        return js
+    }
+
+    func testEveryDiagramTextHasATranslationInEveryLanguage() {
+        XCTAssertFalse(Self.diagramTexts.isEmpty)
+        for language in Self.languages where language != "en" {
+            let strings = Self.localizedStrings(language)
+            for text in Self.diagramTexts {
+                XCTAssertNotNil(strings[text], "\(language) has no translation for \(text.debugDescription)")
+            }
+        }
     }
 
     func testViewerKitMatchesTheApp() throws {

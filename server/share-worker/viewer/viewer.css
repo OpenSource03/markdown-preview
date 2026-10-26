@@ -556,6 +556,16 @@ article.markdown-body [id] { scroll-margin-top: 16px; }
   color: var(--muted);
 }
 
+/* MARK: Links to the author's other files, which the share does not carry:
+   still text, not a link, with a note on hover (main.js). */
+
+.markdown-body a.mdp-unshared-link {
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
 /* MARK: Code blocks. The app's code background (#f9f9f9) all but matches
    the sheet here, so code sits on its own surface: white with a hairline
    edge in light, a step above the sheet in dark. Diagrams use the same.
@@ -571,6 +581,13 @@ article.markdown-body [id] { scroll-margin-top: 16px; }
     --code-bg: #1a1a1b;
     --code-border: rgba(255, 255, 255, 0.08);
   }
+}
+
+/* MARK: Diagrams print whole: the reader's zoom and pan (an inline
+   transform the app's wiring sets) does not reach the page. */
+
+@media print {
+  .mermaid-figure .mermaid { transform: none !important; }
 }
 
 /* MARK: Loading. Only a slow load shows it: "Loading…" fades in after one

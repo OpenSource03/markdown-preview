@@ -4,7 +4,7 @@
 // ever sees the encrypted envelope. docs/share-link-plan.md §5.
 
 import { ShareError, openEnvelope, parseLink } from "./share-crypto.js";
-import { assetPathForSource, base64Bytes, decodePayload, displayTitle, isWebSource } from "./payload.js";
+import { assetPathForSource, base64Bytes, decodePayload, displayTitle, hasScheme, isWebSource } from "./payload.js";
 import { pickLanguage, strings } from "./strings.js";
 
 // An explicit allowlist (never USE_PROFILES, which resets ALLOWED_ATTR):
@@ -16,6 +16,8 @@ const SANITIZE_CONFIG = {
     "h6", "hr", "i", "img", "input", "ins", "kbd", "li", "mark", "ol", "p", "pre", "q", "s",
     "samp", "section", "small", "span", "strong", "sub", "summary", "sup", "table", "tbody",
     "td", "tfoot", "th", "thead", "tr", "u", "ul", "var", "wbr",
+    // Only the diagram HUD's buttons stay (see the afterSanitizeAttributes hook).
+    "button",
   ],
   ALLOWED_ATTR: [
     "align", "alt", "aria-hidden", "aria-label", "checked", "class", "colspan", "dir",
@@ -320,6 +322,43 @@ page.resizer.addEventListener("pointermove", (event) => {
   resizerPointerY = event.clientY;
 });
 
+/**
+ * Diagrams, drawn as the app draws them: diagrams.js is Pele and the app's
+ * wiring (zoom, Fill width, the HUD), loaded only for documents that have
+ * diagrams and not waited for. Each draws as it nears the screen, and all
+ * at once to print. Without Pele the figures show their source.
+ */
+async function drawDiagrams(figures) {
+  if (!figures.length) return;
+  // A print can start before diagrams.js arrives: it then shows each
+  // diagram's source laid out as text, as a failed load does.
+  // Printing undoes only what it added: a failed load keeps its source, and
+  // diagrams drawn during the print get their controls back after it.
+  let diagrams = null;
+  let failed = false;
+  let printingSource = false;
+  const showSource = (shown) => figures.forEach((figure) => figure.classList.toggle("mermaid-error", shown));
+  window.addEventListener("beforeprint", () => {
+    if (diagrams) diagrams.renderAll();
+    else if (!failed) {
+      printingSource = true;
+      showSource(true);
+    }
+  });
+  window.addEventListener("afterprint", () => {
+    if (printingSource && !failed) showSource(false);
+    printingSource = false;
+  });
+  await loadVendor("diagrams.js");
+  if (!window.pele || !window.MdpDiagrams) {
+    failed = true;
+    return showSource(true);
+  }
+  const { wiring, messages } = window.MdpDiagrams;
+  diagrams = wiring(messages[language] ?? messages.en);
+  diagrams.bootstrap();
+}
+
 /** Lists the document's h1–h3. The rail stays in place without them, so
  * the layout never moves once the document arrives. */
 function buildContents() {
@@ -473,9 +512,6 @@ async function render(payload) {
   // The app's copy-as-Markdown code reads the source from here.
   window.MdPreview = { source: payload.markdown };
   page.article.innerHTML = DOMPurify.sanitize(payload.html, SANITIZE_CONFIG);
-  // The viewer does not draw diagrams yet; the app's source layout keeps
-  // their line breaks instead of clipping them in the diagram box.
-  page.article.querySelectorAll(".mermaid-figure").forEach((figure) => figure.classList.add("mermaid-error"));
   decorateCodeBlocks();
   const blockedImages = attachImages(payload.assets);
   if (blockedImages > 0) {
@@ -485,8 +521,10 @@ async function render(payload) {
     page.notice.hidden = false;
   }
 
-  // Highlighting and math load only for documents that use them.
+  // Highlighting and math load only for documents that use them; diagrams
+  // load on their own, after the text is in place.
   const math = page.article.querySelectorAll(".math");
+  const diagrams = page.article.querySelectorAll(".mermaid-figure");
   await Promise.all([
     math.length && loadVendor("katex.min.css"),
     math.length && loadVendor("katex.min.js"),
@@ -496,6 +534,7 @@ async function render(payload) {
     MdpRenderers.renderMathElement(element, element.textContent, element.classList.contains("math-display"));
   }
   MdpRenderers.highlightAll();
+  drawDiagrams(diagrams);
   buildContents();
   document.documentElement.dataset.loaded = "document";
   applyReading();
@@ -633,14 +672,52 @@ page.article.addEventListener("click", (event) => {
   target?.scrollIntoView();
 });
 
-// Links leave the page without the key: no referrer, no opener.
-DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-  if (node.tagName === "A" && node.hasAttribute("href")) {
-    const href = node.getAttribute("href");
-    if (!href.startsWith("#")) {
-      node.setAttribute("rel", "noopener noreferrer nofollow");
-      node.setAttribute("target", "_blank");
+const isLocalFileLink = (href) => href !== "" && !hasScheme(href)
+  && !href.startsWith("//") && !href.startsWith("#") && !href.startsWith("?");
+
+const XLINK = "http://www.w3.org/1999/xlink";
+
+/**
+ * A link in the document or in a drawn diagram (SVG <a>, href or
+ * xlink:href). One to another of the author's files (notes.md, ../plan.pdf,
+ * /docs/a.md: no scheme, no host, not this page) is not in the share and
+ * would open a broken page here: it keeps its text. Others leave the page
+ * without the key: no referrer, no opener.
+ */
+function applyLinkRules(link) {
+  const href = link.getAttribute("href") ?? link.getAttributeNS(XLINK, "href");
+  if (href === null) return;
+  if (isLocalFileLink(href)) {
+    link.removeAttribute("href");
+    link.removeAttributeNS(XLINK, "href");
+    link.classList.add("mdp-unshared-link");
+    if (link instanceof SVGElement) {
+      // SVG shows and reads a <title> child, not a title attribute.
+      if (!link.querySelector(":scope > title")) {
+        const note = document.createElementNS("http://www.w3.org/2000/svg", "title");
+        note.textContent = text.linkNotShared;
+        link.prepend(note);
+      }
+    } else {
+      link.setAttribute("title", text.linkNotShared);
     }
+  } else if (!href.startsWith("#")) {
+    link.setAttribute("rel", "noopener noreferrer nofollow");
+    link.setAttribute("target", "_blank");
+  }
+}
+
+// Pele draws diagrams after sanitizing, so their links get the rules here.
+window.addEventListener("md-preview-mermaid-rendered", () => {
+  page.article.querySelectorAll(".mermaid-figure svg a").forEach(applyLinkRules);
+});
+
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A") applyLinkRules(node);
+  // Buttons only for the diagram HUD; its window button needs the app.
+  if (node.tagName === "BUTTON"
+      && (!node.closest(".mermaid-hud") || node.dataset.mmAct === "popup")) {
+    node.remove();
   }
   if (node.tagName === "INPUT") {
     if (node.getAttribute("type") !== "checkbox") node.remove();

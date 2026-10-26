@@ -31,13 +31,20 @@ function emit(name, bytes) {
   return `/s/_viewer/assets/${file}`;
 }
 
-// Loaded by main.js only for documents with code or math.
+// Loaded by main.js only for documents with code, math, or diagrams.
 const vendorURLs = {
   "highlight.min.js": emit("highlight.min.js", readFileSync(join(vendor, "Highlight/highlight.min.js"))),
   "katex.min.js": emit("katex.min.js", readFileSync(join(vendor, "KaTeX/katex.min.js"))),
   "katex.min.css": emit("katex.min.css", readFileSync(join(vendor, "KaTeX/katex.min.css"))),
+  // Pele, then the app's diagram wiring and its words (generated/diagrams.js).
+  "diagrams.js": emit("diagrams.js", Buffer.concat([
+    readFileSync(join(vendor, "Pele/pele.global.js")), Buffer.from("\n;\n"),
+    readFileSync(join(here, "generated/diagrams.js")),
+  ])),
 };
-for (const license of ["DOMPurify/DOMPurify-LICENSE.txt", "Highlight/Highlight-LICENSE.txt", "KaTeX/KaTeX-LICENSE.txt"]) {
+for (const license of [
+  "DOMPurify/DOMPurify-LICENSE.txt", "Highlight/Highlight-LICENSE.txt", "KaTeX/KaTeX-LICENSE.txt", "Pele/Pele-LICENSE.txt",
+]) {
   writeFileSync(join(out, license.split("/")[1]), readFileSync(join(vendor, license)));
 }
 
