@@ -105,7 +105,7 @@ enum ShareLinkSession {
         guard let baseURL = ShareLinkFeature.baseURL else { throw Failure.notConfigured }
         let client = ShareLinkClient(baseURL: baseURL)
         let fileURL = fileURL.standardizedFileURL
-        let (payload, digest) = await makePayload(fileURL: fileURL, markdown: markdown)
+        let (payload, digest) = try await makePayload(fileURL: fileURL, markdown: markdown)
 
         if var record = store.record(forFile: fileURL) {
             // Without the owner token the old link can be neither updated
@@ -202,20 +202,31 @@ enum ShareLinkSession {
     }
 
     /// Renders with the app's own renderer, so the web viewer shows what the
-    /// app shows, and reads the local images it uses. Off the main thread:
-    /// a long document or images on a slow volume would freeze the window.
-    /// Also returns the payload's digest, to compare with the last upload.
+    /// app shows, reads the local images it uses, and downloads its images
+    /// from the web, so readers see them without the page loading anything
+    /// from another server. Off the main thread: a long document or images
+    /// on a slow volume would freeze the window. Also returns the payload's
+    /// digest, to compare with the last upload.
     private static func makePayload(fileURL: URL,
-                                    markdown: String) async -> (SharePayload, digest: String?) {
-        await Task.detached(priority: .userInitiated) {
+                                    markdown: String) async throws -> (SharePayload, digest: String?) {
+        let work = Task.detached(priority: .userInitiated) {
             let html = MarkdownHTML.render(markdown: markdown).articleHTML
-            let assets = ShareLinkAssets.collect(articleHTML: html,
-                                                 directory: fileURL.deletingLastPathComponent())
+            let local = ShareLinkAssets.collect(articleHTML: html,
+                                                directory: fileURL.deletingLastPathComponent())
+            let web = await ShareLinkAssets.downloadWebImages(
+                ShareLinkAssets.webImageSources(articleHTML: html),
+                takenPaths: Set(local.map(\.path)),
+                budget: ShareLinkCrypto.maxEnvelopeBytes - local.reduce(0) { $0 + $1.data.count })
             let payload = SharePayload(title: fileURL.lastPathComponent, markdown: markdown,
-                                       html: html, assets: assets)
+                                       html: html, assets: local + web)
             let digest = (try? payload.encoded()).map { Base64URL.encode(Data(SHA256.hash(data: $0))) }
             return (payload, digest)
-        }.value
+        }
+        // A detached task does not inherit cancellation: Cancel on the
+        // upload sheet must also stop the downloads.
+        let result = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+        try Task.checkCancellation()
+        return result
     }
 
     /// Built from the key in hand, so the Keychain is not read back.
@@ -228,16 +239,19 @@ enum ShareLinkSession {
 
     /// Encodes and seals off the main thread (PBKDF2, DEFLATE, and base64
     /// images are all slow). When the images push the envelope over the
-    /// upload limit, the link carries the text alone.
+    /// upload limit, fewer go along: see `ShareLinkAssets.assetsToTry`.
     private static func seal(_ payload: SharePayload, key: Data) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
-            do {
-                return try ShareLinkCrypto.seal(payload.encoded(), key: key, password: nil)
-            } catch ShareLinkCrypto.Failure.tooLarge where !payload.assets.isEmpty {
-                let textOnly = SharePayload(title: payload.title, markdown: payload.markdown,
-                                            html: payload.html, assets: [])
-                return try ShareLinkCrypto.seal(textOnly.encoded(), key: key, password: nil)
+            for assets in ShareLinkAssets.assetsToTry(payload.assets) {
+                do {
+                    let attempt = SharePayload(title: payload.title, markdown: payload.markdown,
+                                               html: payload.html, assets: assets)
+                    return try ShareLinkCrypto.seal(attempt.encoded(), key: key, password: nil)
+                } catch ShareLinkCrypto.Failure.tooLarge where !assets.isEmpty {
+                    continue
+                }
             }
+            throw ShareLinkCrypto.Failure.tooLarge
         }.value
     }
 }

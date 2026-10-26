@@ -115,6 +115,124 @@ final class ShareLinkAssetsTests: XCTestCase {
         XCTAssertEqual(assets.first?.data, Data("img/a.png".utf8))
     }
 
+    // MARK: - Web images
+
+    func testListsShownWebImagesOnceWithReferencesDecoded() {
+        let html = """
+        <img src="https://example.com/a.png?x=1&amp;y=2"><img src="https://example.com/a.png?x=1&amp;y=2">
+        <img src="http://example.com/b.png"><img src="img/a.png"><img src="data:image/png;base64,AA">
+        <img src="ftp://example.com/c.png"><img hidden src="https://example.com/hidden.png">
+        <!-- <img src="https://example.com/comment.png"> -->
+        """
+        XCTAssertEqual(ShareLinkAssets.webImageSources(articleHTML: html),
+                       ["https://example.com/a.png?x=1&y=2", "http://example.com/b.png"])
+    }
+
+    func testDownloadsHTTPImagesOverHTTPSAndKeepsTheirAddress() async {
+        let assets = await ShareLinkAssets.downloadWebImages(["http://example.com/a.png"], takenPaths: []) { url in
+            XCTAssertEqual(url.absoluteString, "https://example.com/a.png")
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "image/png"])!
+            return (Data([1]), response)
+        }
+        XCTAssertEqual(assets.map(\.source), ["http://example.com/a.png"])
+    }
+
+    func testListsAtMostFiftyWebImages() {
+        let html = (1...60).map { #"<img src="https://example.com/\#($0).png">"# }.joined()
+        let sources = ShareLinkAssets.webImageSources(articleHTML: html)
+        XCTAssertEqual(sources.count, ShareLinkAssets.maxWebImages)
+        XCTAssertEqual(sources.last, "https://example.com/50.png")
+    }
+
+    func testDownloadsSupportedWebImagesUnderTheirSources() async {
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        let assets = await ShareLinkAssets.downloadWebImages([
+            "https://example.com/ok.png",
+            "https://example.com/missing.png",
+            "https://example.com/page",
+            "https://example.com/photo.jpg",
+            "https://example.com/huge.png",
+            "https://example.com/error.png",
+        ], takenPaths: ["web/1.png"]) { url in
+            let (status, type, data): (Int, String, Data) = switch url.lastPathComponent {
+            case "ok.png": (200, "image/png", png)
+            case "missing.png": (404, "image/png", png)
+            case "page": (200, "text/html", Data("<html>".utf8))
+            // An error page for a .png address: the extension must not make it an image.
+            case "error.png": (200, "text/html", Data("<html>".utf8))
+            case "photo.jpg": (200, "application/octet-stream", Data([0xFF, 0xD8]))
+            default: (200, "image/png", Data(count: ShareLinkAssets.maxWebImageBytes + 1))
+            }
+            let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": type])!
+            return (data, response)
+        }
+        // The document's own web/ folder is taken, so web images go in web_/.
+        XCTAssertEqual(assets.map(\.path), ["web_/1.png", "web_/4.jpeg"])
+        XCTAssertEqual(assets.map(\.type), ["image/png", "image/jpeg"])
+        XCTAssertEqual(assets.map(\.source), ["https://example.com/ok.png", "https://example.com/photo.jpg"])
+        XCTAssertEqual(assets.first?.data, png)
+    }
+
+    func testKeepsSmallWebImagesBesideLargeLocalOnesAndTheyStillSeal() throws {
+        // Like a README: 4.5 MB of screenshots (random bytes do not compress,
+        // like PNG data) and seven small badges.
+        var screenshots = [UInt8](repeating: 0, count: 4_500_000)
+        for index in screenshots.indices { screenshots[index] = UInt8.random(in: 0...255) }
+        let local = SharePayload.Asset(path: "docs/shot.png", type: "image/png", data: Data(screenshots))
+        let badges = (1...7).map {
+            SharePayload.Asset(path: "web/\($0).svg", type: "image/svg+xml", data: Data(count: 2_000),
+                               source: "https://img.shields.io/badge/\($0)")
+        }
+        let first = try XCTUnwrap(ShareLinkAssets.assetsToTry([local] + badges).first)
+        XCTAssertEqual(first.count, 8)
+        let payload = SharePayload(title: "README.md", markdown: "# R", html: "<h1>R</h1>", assets: first)
+        XCTAssertNoThrow(try ShareLinkCrypto.seal(payload.encoded(), key: Data(count: 32), password: nil))
+    }
+
+    func testKeepsOnlyTheSmallestWebImagesThatFitTheBudgetWhileDownloading() async {
+        let sizes = ["a": 300, "b": 100, "c": 500, "d": 200]
+        let assets = await ShareLinkAssets.downloadWebImages(
+            ["a", "b", "c", "d"].map { "https://example.com/\($0).png" }, takenPaths: [], budget: 350
+        ) { url in
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "image/png"])!
+            return (Data(count: sizes[url.deletingPathExtension().lastPathComponent]!), response)
+        }
+        XCTAssertEqual(assets.map(\.data.count), [100, 200])
+    }
+
+    func testDownloadsNothingWhenTheLocalImagesFillTheShare() async {
+        for budget in [0, -1] {
+            let assets = await ShareLinkAssets.downloadWebImages(["https://example.com/a.png"], takenPaths: [],
+                                                                 budget: budget) { url in
+                XCTFail("fetched \(url) with budget \(budget)")
+                throw URLError(.cancelled)
+            }
+            XCTAssertEqual(assets, [], "budget \(budget)")
+        }
+    }
+
+    func testFallsBackToTextOnlyWhenOnlyWebImagesWereSent() {
+        let web = SharePayload.Asset(path: "web/1.png", type: "image/png", data: Data(count: 10),
+                                     source: "https://example.com/a.png")
+        XCTAssertEqual(ShareLinkAssets.assetsToTry([web]).map(\.count), [1, 0])
+    }
+
+    func testLeavesOutTheLargestWebImagesFirst() {
+        let asset = { (path: String, bytes: Int, web: Bool) in
+            SharePayload.Asset(path: path, type: "image/png", data: Data(count: bytes),
+                               source: web ? "https://example.com/\(path)" : nil)
+        }
+        let tries = ShareLinkAssets.assetsToTry([
+            asset("local.png", 3_000_000, false),
+            asset("big.png", 3_000_000, true),
+            asset("small.png", 1_000, true),
+        ])
+        XCTAssertEqual(tries.map { $0.map(\.path) }, [["local.png", "small.png"], ["local.png"], []])
+    }
+
     func testCollectsFromTheAppRenderer() {
         let html = MarkdownHTML.render(markdown: "![a](img/a.png)\n\n![p](<img/My Photo.jpg>)\n").articleHTML
         XCTAssertEqual(collect(html).map(\.path), ["img/a.png", "img/My Photo.jpg"])

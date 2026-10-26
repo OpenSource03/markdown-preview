@@ -4,7 +4,7 @@
 // ever sees the encrypted envelope. docs/share-link-plan.md §5.
 
 import { ShareError, openEnvelope, parseLink } from "./share-crypto.js";
-import { assetPathForSource, base64Bytes, decodePayload, displayTitle } from "./payload.js";
+import { assetPathForSource, base64Bytes, decodePayload, displayTitle, isWebSource } from "./payload.js";
 import { pickLanguage, strings } from "./strings.js";
 
 // An explicit allowlist (never USE_PROFILES, which resets ALLOWED_ATTR):
@@ -517,6 +517,8 @@ window.addEventListener("copy", (event) => {
 /** Points images at the share's own files; returns how many remote images were hidden. */
 function attachImages(assets) {
   const byPath = new Map(assets.map((asset) => [asset.path, asset]));
+  // Images from the web, downloaded by the app when it made the link.
+  const bySource = new Map(assets.filter((asset) => asset.source).map((asset) => [asset.source, asset.path]));
   const urls = new Map();
   const urlFor = (path) => {
     const asset = byPath.get(path);
@@ -528,13 +530,13 @@ function attachImages(assets) {
     const source = image.getAttribute("src") ?? "";
     // Images embedded in the document travel with it and reach no server.
     if (/^data:image\//i.test(source)) continue;
-    const url = urlFor(assetPathForSource(source));
+    const url = urlFor(bySource.get(source) ?? assetPathForSource(source));
     if (url) {
       image.src = url;
     } else {
       // Remote images would tell their server who opened the link; the
       // page's CSP blocks them anyway, so show the description instead.
-      if (/^https?:/i.test(source)) blocked += 1;
+      if (isWebSource(source)) blocked += 1;
       const placeholder = document.createElement("span");
       placeholder.className = "mdp-missing-image";
       placeholder.textContent = image.alt || text.image;

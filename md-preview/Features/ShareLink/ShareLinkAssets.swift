@@ -2,10 +2,10 @@
 //  ShareLinkAssets.swift
 //  md-preview
 //
-//  Finds the local images a rendered document uses, so a share can carry
-//  them. Only files inside the document's folder go along; remote images
-//  stay links. Kept free of AppKit so the SPM helper tests can exercise it
-//  without a GUI host.
+//  Finds the images a rendered document uses, so a share can carry them:
+//  files inside the document's folder, and images from the web, downloaded
+//  when the link is made. Kept free of AppKit so the SPM helper tests can
+//  exercise it without a GUI host.
 //
 
 import Foundation
@@ -46,20 +46,13 @@ nonisolated enum ShareLinkAssets {
                         directory: URL,
                         reader: (URL) throws -> Data = { try Data(contentsOf: $0) })
         -> [SharePayload.Asset] {
-        let html = inertHTML.stringByReplacingMatches(
-            in: html, range: NSRange(html.startIndex..., in: html), withTemplate: "")
         let base = directory.standardizedFileURL
         let root = base.resolvingSymlinksInPath()
         var seen = Set<String>()
         var assets: [SharePayload.Asset] = []
 
-        for match in imgTag.matches(in: html, range: NSRange(html.startIndex..., in: html)) {
-            guard let tagRange = Range(match.range, in: html) else { continue }
-            guard let attributes = attributes(ofTag: String(html[tagRange])),
-                  attributes["hidden"] == nil,
-                  let src = attributes["src"],
-                  let source = decodedRelativeSource(src)
-            else { continue }
+        for src in shownImageSources(in: html) {
+            guard let source = decodedRelativeSource(src) else { continue }
 
             // The authored path names the asset, because the HTML refers to
             // it by that name; the resolved file decides confinement and is
@@ -75,6 +68,167 @@ nonisolated enum ShareLinkAssets {
             assets.append(.init(path: path, type: type, data: data))
         }
         return assets
+    }
+
+    /// The `http(s)` addresses of the images `articleHTML` shows, each once,
+    /// with character references decoded as the browser reads them.
+    /// At most the first `maxWebImages`, so a page of hundreds of images
+    /// does not hold Copy Link for minutes.
+    static func webImageSources(articleHTML html: String) -> [String] {
+        var seen = Set<String>()
+        return Array(shownImageSources(in: html)
+            .map(decodingCharacterReferences)
+            .filter { SharePayload.isWebSource($0) && seen.insert($0).inserted }
+            .prefix(maxWebImages))
+    }
+
+    static let maxWebImages = 50
+
+    /// The largest web image that can fit. base64 makes an image a third
+    /// larger in the JSON, but DEFLATE takes most of that back, so an image
+    /// costs the envelope about its own size.
+    static let maxWebImageBytes = ShareLinkCrypto.maxEnvelopeBytes
+
+    /// The asset lists to seal, most first: the local images and as many
+    /// web images as fit by size (about its own size each, see
+    /// `maxWebImageBytes`), the largest left out first; then the local
+    /// images alone; then none. Sealing still checks the real size.
+    static func assetsToTry(_ assets: [SharePayload.Asset]) -> [[SharePayload.Asset]] {
+        let local = assets.filter { $0.source == nil }
+        let size = { (assets: [SharePayload.Asset]) in assets.reduce(0) { $0 + $1.data.count } }
+        var web = assets.filter { $0.source != nil }.sorted { $0.data.count < $1.data.count }
+        while !web.isEmpty, size(local) + size(web) > ShareLinkCrypto.maxEnvelopeBytes {
+            web.removeLast()
+        }
+        let kept = Set(web.map(\.path))
+        let first = assets.filter { $0.source == nil || kept.contains($0.path) }
+        var lists = [first]
+        if first.count > local.count { lists.append(local) }
+        if !local.isEmpty { lists.append([]) }
+        return lists
+    }
+
+    /// MIME type to the extension a web image's asset gets.
+    private static let extensionForType = Dictionary(mediaTypes.map { ($0.value, $0.key) }, uniquingKeysWith: min)
+
+    private static let maxParallelDownloads = 6
+
+    /// Downloads the web images, six at a time. Each asset keeps the address
+    /// the document uses, under web/1.png and so on (another folder name
+    /// when the document has its own web/ folder). An image that fails, is
+    /// too large, or is not a supported type stays out; the web viewer
+    /// shows its description instead. Only `budget` bytes of images are
+    /// kept: past it, the largest is dropped as each download finishes, so
+    /// memory stays near what the share can carry (see `assetsToTry`).
+    static func downloadWebImages(
+        _ sources: [String],
+        takenPaths: Set<String>,
+        budget: Int = ShareLinkCrypto.maxEnvelopeBytes,
+        fetch: @escaping @Sendable (URL) async throws -> (Data, URLResponse) = fetchWebImage
+    ) async -> [SharePayload.Asset] {
+        // The local images already fill the share: nothing more can go in.
+        guard budget > 0 else { return [] }
+        var folder = "web"
+        while takenPaths.contains(where: { $0 == folder || $0.hasPrefix(folder + "/") }) { folder += "_" }
+        let webFolder = folder
+        let download: @Sendable (Int) async -> (Int, SharePayload.Asset?) = { index in
+            (index, await webImage(sources[index], path: "\(webFolder)/\(index + 1)", fetch: fetch))
+        }
+        var slots = [SharePayload.Asset?](repeating: nil, count: sources.count)
+        var kept = 0
+        await withTaskGroup(of: (Int, SharePayload.Asset?).self) { group in
+            var next = min(maxParallelDownloads, sources.count)
+            for index in 0..<next { group.addTask { await download(index) } }
+            for await (index, asset) in group {
+                slots[index] = asset
+                kept += asset?.data.count ?? 0
+                while kept > budget, let largest = slots.indices.max(by: {
+                    (slots[$0]?.data.count ?? 0) < (slots[$1]?.data.count ?? 0)
+                }), let dropped = slots[largest] {
+                    kept -= dropped.data.count
+                    slots[largest] = nil
+                }
+                guard next < sources.count else { continue }
+                let index = next
+                next += 1
+                group.addTask { await download(index) }
+            }
+        }
+        return slots.compactMap { $0 }
+    }
+
+    /// The image at `source` as an asset at `path` plus its extension, or
+    /// nil when it cannot go in the share.
+    private static func webImage(
+        _ source: String, path: String,
+        fetch: @Sendable (URL) async throws -> (Data, URLResponse)
+    ) async -> SharePayload.Asset? {
+        guard let url = secureURL(source), let fetched = try? await fetch(url) else { return nil }
+        let (data, response) = fetched
+        guard (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
+              !data.isEmpty, data.count <= maxWebImageBytes,
+              let type = webImageType(response: response, url: url),
+              let fileExtension = extensionForType[type]
+        else { return nil }
+        return .init(path: "\(path).\(fileExtension)", type: type, data: data, source: source)
+    }
+
+    /// The address to download from: `https` as is, and an `http` address
+    /// as `https`, since App Transport Security blocks plain `http` and most
+    /// image hosts serve both. The asset keeps the document's address.
+    static func secureURL(_ source: String) -> URL? {
+        guard var components = URLComponents(string: source) else { return nil }
+        switch components.scheme?.lowercased() {
+        case "https": break
+        case "http": components.scheme = "https"
+        default: return nil
+        }
+        return components.url
+    }
+
+    /// No cookies, no cache, 20 seconds in all for each image.
+    private static let webImageSession = ShareLinkClient.makeSession(resourceTimeout: 20)
+
+    /// One image from the web. It reads no body for an error status, and
+    /// stops reading as soon as the image is larger than any share can carry.
+    @Sendable static func fetchWebImage(_ url: URL) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await webImageSession.bytes(from: url)
+        if let status = (response as? HTTPURLResponse)?.statusCode, !(200..<300).contains(status) {
+            throw URLError(.badServerResponse)
+        }
+        guard response.expectedContentLength <= maxWebImageBytes else { throw URLError(.dataLengthExceedsMaximum) }
+        var data = Data()
+        data.reserveCapacity(max(0, Int(response.expectedContentLength)))
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count > maxWebImageBytes { throw URLError(.dataLengthExceedsMaximum) }
+        }
+        return (data, response)
+    }
+
+    /// Server types that say nothing about the content.
+    private static let genericTypes: Set<String> = ["", "application/octet-stream", "binary/octet-stream"]
+
+    /// The image's type from the server, or from its address's extension
+    /// when the server gives none or a generic one; nil otherwise, so an
+    /// error page served for a .png address is not taken for an image.
+    private static func webImageType(response: URLResponse, url: URL) -> String? {
+        let type = response.mimeType?.lowercased() ?? ""
+        if SharePayload.allowedAssetTypes.contains(type) { return type }
+        return genericTypes.contains(type) ? mediaTypes[url.pathExtension.lowercased()] : nil
+    }
+
+    /// The `src` of each image the preview shows, as written in the HTML.
+    private static func shownImageSources(in html: String) -> [String] {
+        let html = inertHTML.stringByReplacingMatches(
+            in: html, range: NSRange(html.startIndex..., in: html), withTemplate: "")
+        return imgTag.matches(in: html, range: NSRange(html.startIndex..., in: html)).compactMap { match in
+            guard let tagRange = Range(match.range, in: html),
+                  let attributes = attributes(ofTag: String(html[tagRange])),
+                  attributes["hidden"] == nil
+            else { return nil }
+            return attributes["src"]
+        }
     }
 
     /// The tag's attributes by lowercased name, the first of each name

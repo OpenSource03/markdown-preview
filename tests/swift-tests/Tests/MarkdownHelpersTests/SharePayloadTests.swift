@@ -33,6 +33,31 @@ final class SharePayloadTests: XCTestCase {
 
     // MARK: - Validation
 
+    func testRoundTripsAWebImageWithItsSource() throws {
+        let payload = SharePayload(title: "a.md", markdown: "![x](https://example.com/x.png)",
+                                   html: #"<p><img src="https://example.com/x.png"></p>"#,
+                                   assets: [.init(path: "web/1.png", type: "image/png", data: Data([1]),
+                                                  source: "https://example.com/x.png")])
+        XCTAssertEqual(try SharePayload.decode(payload.encoded()), payload)
+    }
+
+    func testCountsASourceLengthInUTF16UnitsAsTheViewerDoes() {
+        // "𝔸" is one Character but two UTF-16 units, as JavaScript counts it.
+        let base = "https://example.com/"
+        let fits = base + String(repeating: "𝔸", count: (4096 - base.utf16.count) / 2)
+        XCTAssertTrue(SharePayload.isWebSource(fits))
+        XCTAssertFalse(SharePayload.isWebSource(fits + "𝔸"))
+    }
+
+    func testRejectsASourceThatIsNotAWebAddress() {
+        for source in ["javascript:alert(1)", "file:///etc/passwd", "img/x.png", "https://"] {
+            let asset = #"[{"path":"web/1.png","type":"image/png","data":"AQ==","source":"\#(source)"}]"#
+            XCTAssertThrowsError(try SharePayload.decode(json(asset)), source) {
+                XCTAssertEqual($0 as? SharePayload.Failure, .invalidAssetSource(source))
+            }
+        }
+    }
+
     func testRejectsAnotherVersion() {
         XCTAssertThrowsError(try SharePayload.decode(json("[]", version: 2))) {
             XCTAssertEqual($0 as? SharePayload.Failure, .unsupportedVersion(2))
@@ -98,8 +123,12 @@ final class SharePayloadTests: XCTestCase {
         let payload = SharePayload(title: "Plan", markdown: "# Plan\n", html: "", assets: [
             .init(path: "img/a.png", type: "image/png", data: Data("png".utf8)),
             .init(path: "../outside.png", type: "image/png", data: Data("x".utf8)),
+            .init(path: "web/1.png", type: "image/png", data: Data("w".utf8), source: "https://example.com/w.png"),
         ])
         let file = try payload.unpack(into: shareFolder)
+        // The Markdown names a web image by its address, so no file is written for it.
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: file.deletingLastPathComponent().appendingPathComponent("web").path))
 
         XCTAssertEqual(file.lastPathComponent, "Plan.md")
         XCTAssertEqual(file.deletingLastPathComponent().lastPathComponent, "Plan")
