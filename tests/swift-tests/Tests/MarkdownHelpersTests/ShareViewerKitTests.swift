@@ -42,10 +42,13 @@ final class ShareViewerKitTests: XCTestCase {
             \(MarkdownHTML.highlightAllBody)
             \(MarkdownHTML.mathElementRenderer)
             \(MarkdownHTML.markdownSelectionScript)
+            \(MarkdownHTML.tableColumnResizeScript)
             window.MdpRenderers = {
                 highlightAll: highlightAll,
                 renderMathElement: renderMathElement,
                 markdownForSelection: markdownForSelection,
+                wrapTables: wrapTables,
+                enableTableColumnResize: enableTableColumnResize,
             };
             })();
 

@@ -439,7 +439,9 @@ yet: password links, Report, burn after reading. Diagrams draw with the app's wi
 languages) on Pele, loaded together only for documents with diagrams and after the text,
 with the app's HUD less its window button. A link to another of the author's files (a
 relative or root path), in the text or in a diagram, stays as text with a note, since the
-share does not carry it. Deviation
+share does not carry it. Table columns resize with the app's own code
+(`tableColumnResizeScript`, exported as `enableTableColumnResize`): drag a header edge,
+double-click it to fit the header. Deviation
 from the text below: `style-src-attr 'unsafe-inline'` is allowed because KaTeX sets
 inline styles; scripts stay `'self'` only.
 
