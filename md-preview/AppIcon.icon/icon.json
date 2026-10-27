@@ -1,14 +1,32 @@
 {
-  "fill" : {
-    "automatic-gradient" : "extended-gray:1.00000,1.00000"
-  },
+  "fill-specializations" : [
+    {
+      "value" : {
+        "automatic-gradient" : "extended-gray:1.00000,1.00000"
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "automatic-gradient" : "extended-gray:0.03700,1.00000"
+      }
+    }
+  ],
   "groups" : [
     {
       "layers" : [
         {
           "fill" : "none",
           "hidden" : false,
-          "image-name" : "ChatGPT Image Apr 30, 2026, 06_55_12 PM.png",
+          "image-name-specializations" : [
+            {
+              "value" : "ChatGPT Image Apr 30, 2026, 06_55_12 PM.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "AppIcon Dark.png"
+            }
+          ],
           "name" : "ChatGPT Image Apr 30, 2026, 06_55_12 PM",
           "position" : {
             "scale" : 0.82,
