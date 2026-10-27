@@ -488,12 +488,14 @@
 "Sharing reached its daily limit. Try again after %@." = "Sharing reached its daily limit. Try again after %@.";
 "You are offline. Connect to the internet, then try again." = "You are offline. Connect to the internet, then try again.";
 "Markdown Preview could not reach the sharing server. Try again later." = "Markdown Preview could not reach the sharing server. Try again later.";
+"Markdown Preview could not use the Keychain. Try again." = "Markdown Preview could not use the Keychain. Try again.";
 
 /* Share links */
 "Keep Document Private" = "Keep Document Private";
 
 /* Share links */
-"Markdown Preview lost the key that manages this link, so it cannot change or stop it. The link stops working on %@." = "Markdown Preview lost the key that manages this link, so it cannot change or stop it. The link stops working on %@.";
+"Markdown Preview lost the key for this link, so it cannot change or stop it. The link works until %@. Copy Link makes a new link." = "Markdown Preview lost the key for this link, so it cannot change or stop it. The link works until %@. Copy Link makes a new link.";
+"Markdown Preview lost the key for this link, so it cannot delete the copy on the server. People with the link can open this document until %@." = "Markdown Preview lost the key for this link, so it cannot delete the copy on the server. People with the link can open this document until %@.";
 
 /* Opening share links */
 "Open Shared Link…" = "Open Shared Link…";

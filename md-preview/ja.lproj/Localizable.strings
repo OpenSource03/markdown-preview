@@ -488,12 +488,14 @@
 "Sharing reached its daily limit. Try again after %@." = "共有は1日の上限に達しました。%@ 以降にもう一度お試しください。";
 "You are offline. Connect to the internet, then try again." = "オフラインです。インターネットに接続してから、もう一度お試しください。";
 "Markdown Preview could not reach the sharing server. Try again later." = "Markdown Preview は共有サーバに接続できませんでした。しばらくしてからもう一度お試しください。";
+"Markdown Preview could not use the Keychain. Try again." = "Markdown Preview はキーチェーンを使用できませんでした。もう一度お試しください。";
 
 /* Share links */
 "Keep Document Private" = "書類を非公開のままにする";
 
 /* Share links */
-"Markdown Preview lost the key that manages this link, so it cannot change or stop it. The link stops working on %@." = "Markdown Preview はこのリンクを管理するキーを失ったため、リンクを変更または停止できません。リンクは %@ に無効になります。";
+"Markdown Preview lost the key for this link, so it cannot change or stop it. The link works until %@. Copy Link makes a new link." = "Markdown Preview はこのリンクのキーを失ったため、リンクを変更または停止できません。リンクは %@ まで有効です。「リンクをコピー」で新しいリンクを作成します。";
+"Markdown Preview lost the key for this link, so it cannot delete the copy on the server. People with the link can open this document until %@." = "Markdown Preview はこのリンクのキーを失ったため、サーバ上のコピーを削除できません。リンクを知っている人は %@ までこの書類を開けます。";
 
 /* Opening share links */
 "Open Shared Link…" = "共有リンクを開く…";
