@@ -68,6 +68,101 @@ nonisolated extension MarkdownHTML {
     private static let tablePopupEnabled = true
     #endif
 
+    /// The code block header's icons, as the shapes of a 24-unit, 1.6-stroke
+    /// line icon; the page draws them as SVG and `BlockGlassHUD` as template
+    /// images.
+    static let codeIconShapes: [String: String] = [
+        "copy": #"<rect x="4" y="8" width="12" height="13" rx="3"/><path d="M8 8V6a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-1"/>"#,
+        "check": #"<path d="m5 12 4 4L19 6"/>"#,
+        "wrap": #"<path d="M4 6h16M4 11h12a4 4 0 0 1 0 8h-5m3-3-3 3 3 3M4 16h3"/>"#,
+        "unwrap": #"<path d="M4 6h16M4 12h16m-4-4 4 4-4 4M4 18h7"/>"#,
+    ]
+
+    /// The opening tag of a line icon in the code block header's stroke;
+    /// the page's icons, the CSS masks and `BlockGlassHUD` all use it.
+    static func lineIconSVGOpen(stroke: String = "currentColor") -> String {
+        #"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="\#(stroke)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">"#
+    }
+
+    private static let codeIconShapesJS: String = {
+        let entries = codeIconShapes.sorted { $0.key < $1.key }
+            .map { "\($0.key): \(javaScriptStringLiteral($0.value))" }
+        return "{ " + entries.joined(separator: ", ") + " }"
+    }()
+
+    /// `makeNativeHUDReporter(kind, describe)`, put into each script whose
+    /// blocks have controls. With `data-mdp-native-hud` on the root (the app
+    /// on macOS 26) the host draws those controls as native glass over the
+    /// block under the pointer (`BlockGlassHUD`); the reporter tells it
+    /// which block that is, by an id, and where, once a frame while the page
+    /// scrolls. The host's clicks name the block by that id (`block(id)`),
+    /// so they act on the block the glass shows even when the page saw the
+    /// pointer leave it for the glass. `describe(el)` gives the block's
+    /// extra state, or null when it has no controls to show. Null without
+    /// the attribute, so other hosts skip it. The host calls
+    /// `window.mdpRefreshNativeHUD()` after it rebuilt the page around the
+    /// hovered blocks, and `window.mdpReportNativeHUD(kind, id)` after it
+    /// scrolled the page under its glass.
+    static let nativeHUDReporterJS = """
+    function makeNativeHUDReporter(kind, describe) {
+        if (!document.documentElement.hasAttribute('data-mdp-native-hud')) return null;
+        let target = null;
+        let frame = 0;
+        const ids = new WeakMap();
+        const blocks = new Map();
+        let nextID = 0;
+        function post(el) {
+            const extras = el?.isConnected ? describe(el) : null;
+            const message = { kind, visible: !!extras };
+            if (extras) {
+                if (!ids.has(el)) {
+                    ids.set(el, nextID);
+                    blocks.set(nextID++, new WeakRef(el));
+                }
+                const r = el.getBoundingClientRect();
+                Object.assign(message, { id: ids.get(el), x: r.left, y: r.top, width: r.width, height: r.height }, extras);
+            }
+            try { window.webkit?.messageHandlers?.mdPreviewHost?.postMessage(message); } catch (_) {}
+        }
+        window.addEventListener('scroll', () => {
+            if (!target || frame) return;
+            frame = requestAnimationFrame(() => { frame = 0; post(target); });
+        }, { passive: true });
+        window.addEventListener('resize', () => { if (target) post(target); });
+        const reporter = {
+            // The block under the pointer.
+            get target() { return target; },
+            set(el) {
+                if (el === target) return;
+                target = el;
+                post(el);
+            },
+            // The block a host click names, while it is in the page.
+            block(id) {
+                const el = blocks.get(id)?.deref();
+                return el?.isConnected ? el : null;
+            },
+            // Reports `el` again: the hovered block after the page changed,
+            // or the block a host click just changed (a zoom level, Wrap),
+            // so the glass the pointer is on shows its new state.
+            refresh(el = target) { if (el) post(el); },
+        };
+        const refreshOthers = window.mdpRefreshNativeHUD;
+        window.mdpRefreshNativeHUD = () => {
+            refreshOthers?.();
+            reporter.refresh();
+        };
+        // The host scrolled the page under its glass (the pointer on the
+        // glass, not on the block): report the glass's block where it is now.
+        const reportOthers = window.mdpReportNativeHUD;
+        window.mdpReportNativeHUD = (blockKind, id) => {
+            if (blockKind !== kind) return reportOthers?.(blockKind, id);
+            reporter.refresh(reporter.block(id));
+        };
+        return reporter;
+    }
+    """
+
     /// The code block header (language, Wrap, Copy), shared by the app's page
     /// script and the share viewer (exported by ShareViewerKitTests). Defines
     /// `enableCodeBlocks(labels, copyText)`: `labels` in the shape of
@@ -75,12 +170,30 @@ nonisolated extension MarkdownHTML {
     /// text reached the clipboard. Returns `decorateCodeBlocks(root)`.
     static let codeBlockScript: String = """
         function enableCodeBlocks(labels, copyText) {
-            const codeIcon = (kind) => '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ({
-                copy: '<rect x="4" y="8" width="12" height="13" rx="3"/><path d="M8 8V6a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-1"/>',
-                check: '<path d="m5 12 4 4L19 6"/>',
-                wrap: '<path d="M4 6h16M4 11h12a4 4 0 0 1 0 8h-5m3-3-3 3 3 3M4 16h3"/>',
-                unwrap: '<path d="M4 6h16M4 12h16m-4-4 4 4-4 4M4 18h7"/>'
-            })[kind] + '</svg>';
+            const codeIconShapes = \(codeIconShapesJS);
+            const codeIcon = (kind) => \(javaScriptStringLiteral(lineIconSVGOpen())) + codeIconShapes[kind] + '</svg>';
+
+            \(nativeHUDReporterJS)
+            // The host's clicks run the hidden HTML buttons.
+            const codeHUD = makeNativeHUDReporter('codeHUD', (wrap) => ({
+                wrapped: wrap.classList.contains('is-wrapped')
+            }));
+            if (codeHUD) {
+                document.addEventListener('pointerover', (event) => {
+                    codeHUD.set(event.target.closest?.('.md-code-wrap') || null);
+                });
+                document.addEventListener('pointerout', (event) => {
+                    if (!event.relatedTarget) codeHUD.set(null);
+                });
+                window.mdpCodeHUDAction = (act, id) => {
+                    const wrap = codeHUD.block(id);
+                    const selector = act === 'wrap' ? '.md-code-toggle-wrap' : act === 'copy' ? '.md-code-copy' : null;
+                    if (!wrap || !selector) return;
+                    wrap.querySelector(selector)?.click();
+                    // The click handler reports the hovered block itself.
+                    if (wrap !== codeHUD.target) codeHUD.refresh(wrap);
+                };
+            }
 
             function decorateCodeBlocks(root = document) {
                 root.querySelectorAll('pre > code').forEach((code) => {
@@ -101,6 +214,9 @@ nonisolated extension MarkdownHTML {
                     language.className = 'md-code-language';
                     language.textContent = pre.dataset.codeLanguage || 'text';
                     header.appendChild(language);
+                    const actions = document.createElement('span');
+                    actions.className = 'md-code-actions';
+                    header.appendChild(actions);
                     const toggle = document.createElement('button');
                     toggle.type = 'button';
                     toggle.className = 'md-code-action md-code-toggle-wrap';
@@ -108,14 +224,14 @@ nonisolated extension MarkdownHTML {
                     toggle.title = labels.wrapCode;
                     toggle.setAttribute('aria-label', toggle.title);
                     toggle.setAttribute('aria-pressed', 'false');
-                    header.appendChild(toggle);
+                    actions.appendChild(toggle);
                     const button = document.createElement('button');
                     button.type = 'button';
                     button.className = 'md-code-action md-code-copy';
                     button.innerHTML = codeIcon('copy');
                     button.title = labels.copyCode;
                     button.setAttribute('aria-label', labels.copyCode);
-                    header.appendChild(button);
+                    actions.appendChild(button);
                     wrap.insertBefore(header, pre);
                 });
             }
@@ -147,6 +263,7 @@ nonisolated extension MarkdownHTML {
                     toggle.setAttribute('aria-pressed', String(wrapped));
                     toggle.title = wrapped ? labels.unwrapCode : labels.wrapCode;
                     toggle.innerHTML = codeIcon(wrapped ? 'unwrap' : 'wrap');
+                    if (codeHUD && toggle.closest('.md-code-wrap') === codeHUD.target) codeHUD.refresh();
                     return;
                 }
                 const button = event.target.closest('.md-code-copy');
@@ -980,6 +1097,8 @@ nonisolated extension MarkdownHTML {
         // article. Same-flag re-renders skip the WKWebView reload entirely.
         const reappliers = [];
         window.MdPreview = window.MdPreview || {};
+        // The diagram wiring copies through the same ways as code blocks.
+        window.MdPreview.copyText = copyCodeText;
         window.MdPreview.registerReapplier = (fn) => {
             if (typeof fn === 'function') reappliers.push(fn);
         };

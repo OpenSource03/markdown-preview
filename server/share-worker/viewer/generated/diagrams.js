@@ -1,10 +1,8 @@
 /* Generated from the app's MarkdownHTML by ShareViewerKitTests.
    Do not edit; run MDP_WRITE_VIEWER_KIT=1 swift test --filter ShareViewerKitTests. */
 window.MdpDiagrams = {
-    // (messages) => { bootstrap, renderAll }
-    wiring: (messages) => {
-        const fillWidthLabel = messages.fillWidth;
-        const fitDiagramLabel = messages.fitDiagram;
+    // (messages, copyText) => { bootstrap, renderAll }
+    wiring: (messages, copyText) => {
         const states = new WeakMap();
         const renderOptions = { autoDirection: false,
   get fontFamily() { return getComputedStyle(document.body).fontFamily; },
@@ -133,8 +131,14 @@ window.MdpDiagrams = {
                 return;
             }
 
-            figure.addEventListener('pointerenter', () => postMermaidHover(true));
-            figure.addEventListener('pointerleave', () => postMermaidHover(false));
+            figure.addEventListener('pointerenter', () => {
+                postMermaidHover(true);
+                diagramHUD?.set(figure);
+            });
+            figure.addEventListener('pointerleave', () => {
+                postMermaidHover(false);
+                if (diagramHUD?.target === figure) diagramHUD.set(null);
+            });
             figure.addEventListener('wheel', onWheel, { passive: false });
             figure.addEventListener('pointerdown', onPointerDown);
             figure.addEventListener('dblclick', onDoubleClick);
@@ -168,6 +172,82 @@ window.MdpDiagrams = {
                     value
                 });
             } catch (_) {}
+        }
+
+        function makeNativeHUDReporter(kind, describe) {
+    if (!document.documentElement.hasAttribute('data-mdp-native-hud')) return null;
+    let target = null;
+    let frame = 0;
+    const ids = new WeakMap();
+    const blocks = new Map();
+    let nextID = 0;
+    function post(el) {
+        const extras = el?.isConnected ? describe(el) : null;
+        const message = { kind, visible: !!extras };
+        if (extras) {
+            if (!ids.has(el)) {
+                ids.set(el, nextID);
+                blocks.set(nextID++, new WeakRef(el));
+            }
+            const r = el.getBoundingClientRect();
+            Object.assign(message, { id: ids.get(el), x: r.left, y: r.top, width: r.width, height: r.height }, extras);
+        }
+        try { window.webkit?.messageHandlers?.mdPreviewHost?.postMessage(message); } catch (_) {}
+    }
+    window.addEventListener('scroll', () => {
+        if (!target || frame) return;
+        frame = requestAnimationFrame(() => { frame = 0; post(target); });
+    }, { passive: true });
+    window.addEventListener('resize', () => { if (target) post(target); });
+    const reporter = {
+        // The block under the pointer.
+        get target() { return target; },
+        set(el) {
+            if (el === target) return;
+            target = el;
+            post(el);
+        },
+        // The block a host click names, while it is in the page.
+        block(id) {
+            const el = blocks.get(id)?.deref();
+            return el?.isConnected ? el : null;
+        },
+        // Reports `el` again: the hovered block after the page changed,
+        // or the block a host click just changed (a zoom level, Wrap),
+        // so the glass the pointer is on shows its new state.
+        refresh(el = target) { if (el) post(el); },
+    };
+    const refreshOthers = window.mdpRefreshNativeHUD;
+    window.mdpRefreshNativeHUD = () => {
+        refreshOthers?.();
+        reporter.refresh();
+    };
+    // The host scrolled the page under its glass (the pointer on the
+    // glass, not on the block): report the glass's block where it is now.
+    const reportOthers = window.mdpReportNativeHUD;
+    window.mdpReportNativeHUD = (blockKind, id) => {
+        if (blockKind !== kind) return reportOthers?.(blockKind, id);
+        reporter.refresh(reporter.block(id));
+    };
+    return reporter;
+}
+        const diagramHUD = makeNativeHUDReporter('diagramHUD', (figure) =>
+            figure.classList.contains('mermaid-error') || !figure.querySelector('.mermaid svg') ? null : {
+                level: figure.querySelector('.mermaid-hud-level')?.textContent || '100%',
+                popup: !!figure.querySelector('[data-mm-act="popup"]')
+            });
+        if (diagramHUD) {
+            // No focus here: the click was on the host's glass, and
+            // focusing the figure from script would draw its focus ring.
+            window.mdpDiagramHUDAction = (act, id) => {
+                const figure = diagramHUD.block(id);
+                if (!figure) return;
+                runHudAction(figure, act);
+                // After apply() has drawn the new level.
+                requestAnimationFrame(() => diagramHUD.refresh(figure));
+            };
+            // A figure under the pointer that draws later gets its HUD then.
+            window.addEventListener('md-preview-mermaid-rendered', () => diagramHUD.refresh());
         }
 
         // Text of the closest heading before the figure in document
@@ -229,7 +309,12 @@ window.MdpDiagrams = {
                 s.raf = 0;
                 s.surface.style.transform = 'translate(' + s.tx + 'px,' + s.ty + 'px) scale(' + s.scale + ')';
                 const lvl = figure.querySelector('.mermaid-hud-level');
-                if (lvl) lvl.textContent = Math.round(s.scale * 100) + '%';
+                const level = Math.round(s.scale * 100) + '%';
+                // A pan keeps the level: only a new one reaches the host.
+                if (lvl && lvl.textContent !== level) {
+                    lvl.textContent = level;
+                    if (diagramHUD?.target === figure) diagramHUD.refresh();
+                }
             });
         }
 
@@ -257,23 +342,6 @@ window.MdpDiagrams = {
             if (!s) return;
             s.tx = 0; s.ty = 0; s.scale = 1;
             apply(figure, s);
-        }
-
-        function toggleWidth(figure) {
-            const expanded = figure.classList.toggle('mermaid-width-expanded');
-            const btn = figure.querySelector('[data-mm-act="width"]');
-            if (btn) {
-                const label = expanded ? fitDiagramLabel : fillWidthLabel;
-                btn.textContent = expanded ? '⤡' : '⤢';
-                btn.setAttribute('aria-label', label);
-                btn.setAttribute('aria-pressed', String(expanded));
-                btn.setAttribute('title', label);
-            }
-            reset(figure);
-            requestAnimationFrame(() => {
-                cacheRect(figure);
-                window.dispatchEvent(new Event('md-preview-mermaid-rendered'));
-            });
         }
 
         function step(figure, factor) {
@@ -355,13 +423,34 @@ window.MdpDiagrams = {
             const figure = btn.closest('.mermaid-figure');
             if (!figure) return;
             figure.focus();
-            switch (btn.dataset.mmAct) {
+            runHudAction(figure, btn.dataset.mmAct);
+        }
+
+        function runHudAction(figure, act) {
+            switch (act) {
                 case 'in':    step(figure, 1.25); break;
                 case 'out':   step(figure, 0.8);  break;
                 case 'reset': reset(figure);      break;
-                case 'width': toggleWidth(figure); break;
                 case 'popup': openPopup(figure);  break;
+                case 'copy':  copySource(figure); break;
             }
+        }
+
+        // Copies the text the figure was drawn from, through the host's
+        // `copyText`. The HTML button shows a check mark for a moment,
+        // as a code block's does.
+        async function copySource(figure) {
+            const value = figure.querySelector('.mermaid')?.__mdSrc?.replace(/\s+$/, '');
+            if (!value || !(await copyText(value))) return;
+            const button = figure.querySelector('.mermaid-hud [data-mm-act="copy"]');
+            if (!button) return;
+            button.classList.add('is-copied');
+            button.setAttribute('aria-label', messages.copied);
+            clearTimeout(button.__mdCopyTimer);
+            button.__mdCopyTimer = setTimeout(() => {
+                button.classList.remove('is-copied');
+                button.setAttribute('aria-label', messages.copy);
+            }, 1100);
         }
 
         const ro = new ResizeObserver((entries) => {
@@ -370,13 +459,10 @@ window.MdpDiagrams = {
 
         // The HUD in the HTML carries the words of whoever rendered it;
         // these are the reader's (the same in the app).
-        const hudLabels = { out: messages.zoomOut, in: messages.zoomIn, reset: messages.resetZoom };
+        const hudLabels = { out: messages.zoomOut, in: messages.zoomIn, reset: messages.resetZoom, copy: messages.copy };
         function labelHud(figure) {
             figure.querySelectorAll('.mermaid-hud [data-mm-act]').forEach((button) => {
-                const pressed = button.getAttribute('aria-pressed') === 'true';
-                const label = button.dataset.mmAct === 'width'
-                    ? (pressed ? fitDiagramLabel : fillWidthLabel)
-                    : hudLabels[button.dataset.mmAct];
+                const label = hudLabels[button.dataset.mmAct];
                 if (!label) return;
                 button.setAttribute('aria-label', label);
                 if (button.hasAttribute('title')) button.title = label;
@@ -421,8 +507,8 @@ window.MdpDiagrams = {
     zoomOut: "Zoom Out",
     zoomIn: "Zoom In",
     resetZoom: "Reset zoom",
-    fillWidth: "Fill width",
-    fitDiagram: "Fit diagram"
+    copy: "Copy",
+    copied: "Copied"
 },
         ja: {
     errors: {
@@ -439,8 +525,8 @@ window.MdpDiagrams = {
     zoomOut: "縮小",
     zoomIn: "拡大",
     resetZoom: "拡大\/縮小をリセット",
-    fillWidth: "幅に合わせる",
-    fitDiagram: "ダイアグラム全体を表示"
+    copy: "コピー",
+    copied: "コピーしました"
 },
         "zh-Hans": {
     errors: {
@@ -457,8 +543,8 @@ window.MdpDiagrams = {
     zoomOut: "缩小",
     zoomIn: "放大",
     resetZoom: "重置缩放",
-    fillWidth: "填满宽度",
-    fitDiagram: "适应图表"
+    copy: "拷贝",
+    copied: "已拷贝"
 },
         pl: {
     errors: {
@@ -475,8 +561,8 @@ window.MdpDiagrams = {
     zoomOut: "Oddal",
     zoomIn: "Przybliż",
     resetZoom: "Wyzeruj powiększenie",
-    fillWidth: "Wypełnij szerokość",
-    fitDiagram: "Dopasuj diagram"
+    copy: "Kopiuj",
+    copied: "Skopiowano"
 },
         fa: {
     errors: {
@@ -493,8 +579,8 @@ window.MdpDiagrams = {
     zoomOut: "کوچک‌نمایی",
     zoomIn: "بزرگ‌نمایی",
     resetZoom: "بازنشانی بزرگ‌نمایی",
-    fillWidth: "پر کردن عرض",
-    fitDiagram: "برازش نمودار"
+    copy: "کپی",
+    copied: "کپی شد"
 },
     },
 };
