@@ -48,6 +48,7 @@ final class ShareLinkClientTests: XCTestCase {
     func testFetchReturnsTheBody() async throws {
         let client = client { request, _ in
             XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/vnd.md-preview.envelope")
             return (200, "MDP1-bytes")
         }
         let data = try await client.fetch(id: "abc")
@@ -57,7 +58,7 @@ final class ShareLinkClientTests: XCTestCase {
     func testMapsErrorStatuses() async {
         let cases: [(Int, ShareLinkClient.Failure)] = [
             (404, .notFound), (401, .unauthorized), (413, .tooLarge), (429, .rateLimited),
-            (500, .server(status: 500, code: "boom")),
+            (500, .server(status: 500, code: "boom")), (503, .server(status: 503, code: "boom")),
         ]
         for (status, expected) in cases {
             let client = client { _, _ in (status, #"{"error":"boom"}"#) }
@@ -67,6 +68,16 @@ final class ShareLinkClientTests: XCTestCase {
             } catch {
                 XCTAssertEqual(error as? ShareLinkClient.Failure, expected)
             }
+        }
+    }
+
+    func testMapsTheDailyQuota() async {
+        let client = client { _, _ in (503, #"{"error":"quota_exceeded"}"#) }
+        do {
+            _ = try await client.create(Data("MDP1".utf8), expiry: .week)
+            XCTFail("503 quota_exceeded should throw")
+        } catch {
+            XCTAssertEqual(error as? ShareLinkClient.Failure, .quotaExceeded)
         }
     }
 

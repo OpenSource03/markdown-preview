@@ -17,6 +17,8 @@ nonisolated struct ShareLinkClient: Sendable {
         case unauthorized
         case tooLarge
         case rateLimited
+        /// Every sender together reached the server's daily upload limit.
+        case quotaExceeded
         case server(status: Int, code: String?)
         case invalidResponse
     }
@@ -87,8 +89,14 @@ nonisolated struct ShareLinkClient: Sendable {
         _ = try await send(request, body: nil, expecting: 204)
     }
 
+    /// The Worker serves an envelope only with this Accept header, which a
+    /// browser opening the URL as a link cannot send.
+    static let envelopeType = "application/vnd.md-preview.envelope"
+
     func fetch(id: String) async throws -> Data {
-        try await send(URLRequest(url: url(id: id, expiry: nil)), body: nil, expecting: 200)
+        var request = URLRequest(url: url(id: id, expiry: nil))
+        request.setValue(Self.envelopeType, forHTTPHeaderField: "Accept")
+        return try await send(request, body: nil, expecting: 200)
     }
 
     // MARK: - Private
@@ -115,6 +123,7 @@ nonisolated struct ShareLinkClient: Sendable {
         case 401: throw Failure.unauthorized
         case 413: throw Failure.tooLarge
         case 429: throw Failure.rateLimited
+        case 503 where code == "quota_exceeded": throw Failure.quotaExceeded
         default: throw Failure.server(status: http.statusCode, code: code)
         }
     }
