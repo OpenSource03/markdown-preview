@@ -20,14 +20,14 @@
           "hidden" : false,
           "image-name-specializations" : [
             {
-              "value" : "ChatGPT Image Apr 30, 2026, 06_55_12 PM.png"
+              "value" : "AppIcon Light.png"
             },
             {
               "appearance" : "dark",
               "value" : "AppIcon Dark.png"
             }
           ],
-          "name" : "ChatGPT Image Apr 30, 2026, 06_55_12 PM",
+          "name" : "Loupe",
           "position" : {
             "scale" : 0.82,
             "translation-in-points" : [
